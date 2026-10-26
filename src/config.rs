@@ -12,6 +12,7 @@
 //! impl redacts.
 
 use crate::error::ConfigError;
+use crate::secrets::KeyStore;
 use serde::Deserialize;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -32,6 +33,17 @@ impl Secret {
     }
     pub fn expose(&self) -> &str {
         &self.0
+    }
+    pub fn is_encrypted(&self) -> bool {
+        self.0.starts_with("enc:v1:")
+    }
+    /// Decrypt if encrypted, otherwise return plaintext.
+    pub fn decrypt(&self, cipher: &dyn crate::secrets::SecretCipher) -> Result<Secret, ConfigError> {
+        if self.is_encrypted() {
+            Ok(Secret(cipher.decrypt(&self.0)?))
+        } else {
+            Ok(self.clone())
+        }
     }
 }
 impl fmt::Debug for Secret {
@@ -170,6 +182,10 @@ pub struct ProxyConfig {
     /// requests and streams before its upstream session is ended.
     #[serde(default = "default_drain")]
     pub drain_timeout_secs: u64,
+    /// Rewrite plaintext secrets in the config file (hash user passwords,
+    /// encrypt upstream passwords/API keys). Default true.
+    #[serde(default = "default_true")]
+    pub rewrite_secrets: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -191,6 +207,7 @@ impl Default for ProxyConfig {
             upstream_timeout_secs: default_timeout(),
             reload_interval_secs: default_reload(),
             drain_timeout_secs: default_drain(),
+            rewrite_secrets: true,
         }
     }
 }
@@ -595,18 +612,78 @@ fn proc_status_id(key: &str) -> String {
         .unwrap_or_else(|| "?".into())
 }
 
+fn is_permission_error(e: &ConfigError) -> bool {
+    matches!(e, ConfigError::Io { source, .. } if matches!(
+        source.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+    ))
+}
+
 impl Config {
     pub fn load(path: &Path, cache: &PasswordCache) -> Result<Config, ConfigError> {
         let mut text = std::fs::read_to_string(path).map_err(|e| ConfigError::Io {
             path: path.to_path_buf(),
             source: e,
         })?;
-        let r = Self::parse(&text, cache);
+        
+        // Parse to get the data_dir (needed for key loading)
+        let raw: RawConfig = match toml::from_str(&text) {
+            Ok(r) => r,
+            Err(e) => {
+                text.zeroize();
+                // Friendlier message for the pre-[[server]] layout.
+                if let Ok(v) = text.parse::<toml::Table>() {
+                    if v.get("server").map(|s| s.is_table()) == Some(true) {
+                        return Err(ConfigError::invalid(
+                            "`[server]` is now `[proxy]`; `[[server]]` (double brackets) lists the upstream Jellyfin servers",
+                        ));
+                    }
+                }
+                return Err(e.into());
+            }
+        };
+        
+        let data_dir = raw.proxy.data_dir.clone();
+        
+        // Load encryption key
+        let key_store = crate::secrets::DefaultKeyStore;
+        let key = key_store.load(&data_dir)?;
+        let cipher = crate::secrets::XChaCha20Cipher::new(key);
+        
+        // Rewrite secrets if enabled and writable
+        if raw.proxy.rewrite_secrets {
+            match crate::config_rewrite::rewrite_secrets(path, cache, &cipher) {
+                Ok(true) => {
+                    tracing::info!(path = %path.display(), "rewrote plaintext secrets in config file");
+                }
+                Ok(false) => {}
+                Err(e) if is_permission_error(&e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        "config file not writable; secrets remain plaintext on disk: {e}"
+                    );
+                }
+                Err(e) => {
+                    text.zeroize();
+                    return Err(e);
+                }
+            }
+        }
+        
+        let r = Self::parse_with_cipher(&text, cache, Some(&cipher));
         text.zeroize();
         r
     }
 
     pub fn parse(text: &str, cache: &PasswordCache) -> Result<Config, ConfigError> {
+        Self::parse_with_cipher(text, cache, None)
+    }
+
+    fn parse_with_cipher(
+        text: &str,
+        cache: &PasswordCache,
+        cipher: Option<&dyn crate::secrets::SecretCipher>,
+    ) -> Result<Config, ConfigError> {
         let raw: RawConfig = match toml::from_str(text) {
             Ok(r) => r,
             Err(e) => {
@@ -635,11 +712,25 @@ impl Config {
                 password,
             });
         }
+        
+        // Decrypt upstream secrets
+        let mut upstreams = raw.upstreams.clone();
+        if let Some(c) = cipher {
+            for upstream in &mut upstreams {
+                if let Some(password) = &upstream.password {
+                    upstream.password = Some(password.decrypt(c)?);
+                }
+                if let Some(api_key) = &upstream.api_key {
+                    upstream.api_key = Some(api_key.decrypt(c)?);
+                }
+            }
+        }
+        
         // `raw` (and with it every plaintext) is dropped + zeroized here.
         let cfg = Config {
             proxy: raw.proxy.clone(),
             users,
-            upstreams: raw.upstreams.clone(),
+            upstreams,
             merge: raw.merge.clone(),
             cache: raw.cache.clone(),
             tls: raw.tls.clone(),
