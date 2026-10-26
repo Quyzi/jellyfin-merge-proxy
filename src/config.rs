@@ -574,7 +574,7 @@ pub fn first_run_help(path: &Path) -> Option<String> {
             path.display(), path.display(), path.display(), path.display()
         ));
     }
-    
+
     if path.exists() {
         return None;
     }

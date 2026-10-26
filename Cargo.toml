@@ -93,7 +93,7 @@ section = "net"
 priority = "optional"
 assets = [
     ["target/release/jellyfin-merge-proxy", "/usr/bin/", "755"],
-    ["config.example.toml", "/etc/jmp.toml", "644"],
+    ["config.example.toml", "/etc/jmp.toml", "640"],
     ["README.md", "/usr/share/doc/jellyfin-merge-proxy/README.md", "644"],
     ["jellyfin-merge-proxy.service", "/usr/lib/systemd/system/", "644"],
 ]
@@ -116,6 +116,7 @@ chown jmp:jmp /var/lib/jmp
 chmod 700 /var/lib/jmp
 
 # Ensure config file is writable by jmp user (for secret rewriting)
+# Set to jmp:jmp with 640 so jmp can write, root can read
 if [ -f /etc/jmp.toml ]; then
     chown jmp:jmp /etc/jmp.toml
     chmod 640 /etc/jmp.toml

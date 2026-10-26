@@ -15,6 +15,7 @@ case "$1" in
         chmod 700 /var/lib/jmp
 
         # Ensure config file is writable by jmp user (for secret rewriting)
+        # Set to jmp:jmp with 640 so jmp can write, root can read
         if [ -f /etc/jmp.toml ]; then
             chown jmp:jmp /etc/jmp.toml
             chmod 640 /etc/jmp.toml

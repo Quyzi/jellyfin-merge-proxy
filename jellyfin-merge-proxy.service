@@ -40,10 +40,12 @@ RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
-MemoryDenyWriteExecute=true
+# Note: MemoryDenyWriteExecute disabled - rustls/argon2 may need it
+# MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
-SystemCallFilter=~@privileged @resources
+# Note: Allow @privileged for mlock (argon2) and clone (tokio)
+SystemCallFilter=~@resources
 PrivateDevices=true
 DevicePolicy=closed
 CapabilityBoundingSet=
