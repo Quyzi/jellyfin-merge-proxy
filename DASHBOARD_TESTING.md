@@ -72,6 +72,9 @@ and path (e.g. `jellyfin-merge-proxy:9090`, `metrics_path: /metrics`).
 
 ## Lab: traffic, query check and screenshots
 
+Screenshots from this lab run are in [docs/dashboard.md](docs/dashboard.md)
+(images under `docs/images/dashboard/`).
+
 `scripts/dashboard-lab/` has the tools used to exercise every panel against a
 running proxy:
 
