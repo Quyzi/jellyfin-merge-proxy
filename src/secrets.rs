@@ -98,7 +98,7 @@ impl KeyStore for DefaultKeyStore {
         let key_path = data_dir.join("secret.key");
         if key_path.exists() {
             tracing::info!(path = %key_path.display(), "loading encryption key from file");
-            
+
             // Check file permissions on Unix
             #[cfg(unix)]
             {
@@ -110,7 +110,7 @@ impl KeyStore for DefaultKeyStore {
                 let mode = metadata.permissions().mode();
                 let group_read = (mode & 0o040) != 0;
                 let other_read = (mode & 0o004) != 0;
-                
+
                 if group_read || other_read {
                     tracing::warn!(
                         path = %key_path.display(),
@@ -121,7 +121,7 @@ impl KeyStore for DefaultKeyStore {
                     );
                 }
             }
-            
+
             let hex = std::fs::read_to_string(&key_path).map_err(|e| ConfigError::Io {
                 path: key_path.clone(),
                 source: e,
