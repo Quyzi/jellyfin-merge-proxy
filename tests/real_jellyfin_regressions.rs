@@ -71,6 +71,7 @@ async fn start(
     extra: &str,
     setup: impl Fn(&MockBackend, &UpstreamConfig) + Send + Sync + 'static,
 ) -> Env {
+    jmp::telemetry::init_metrics();
     let data = tempfile::tempdir().unwrap();
     let text = config(extra).replacen(
         "reload_interval_secs = 0",
@@ -259,4 +260,45 @@ async fn series_split_across_servers_merges_seasons_and_episodes() {
             "{n} got its own season id"
         );
     }
+}
+
+/// With a server down before its libraries were ever cached, every merged
+/// library silently lost that server and no metric said the answer was
+/// partial (the item fan-outs never even targeted it).
+#[tokio::test]
+async fn views_missing_a_down_server_count_as_partial() {
+    let env = start("[metrics]\nenabled = true\n", |m, cfg| {
+        m.on_json(
+            None,
+            "UserViews",
+            json!({"Items": [{"Id": id(&["movies", &cfg.name]), "Name": "Movies", "CollectionType": "movies",
+                              "Type": "CollectionFolder"}], "TotalRecordCount": 1}),
+        );
+    })
+    .await;
+    env.mock(1).set_down(true);
+    let views = env.get("UserViews").await;
+    assert_eq!(views["Items"].as_array().unwrap().len(), 1, "{views}");
+    let m = env
+        .http
+        .get(format!("{}/metrics", env.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        m.lines()
+            .any(|l| l.starts_with("jmp_fanout_partial_total{endpoint=\"views\"}")),
+        "{m}"
+    );
+    assert!(
+        m.lines()
+            .any(|l| l.starts_with("jmp_fanout_upstream_results_total")
+                && l.contains("endpoint=\"views\"")
+                && l.contains("server=\"s2\"")
+                && !l.contains("success")),
+        "{m}"
+    );
 }
