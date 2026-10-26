@@ -671,17 +671,12 @@ impl Config {
         // Parse to get the data_dir (needed for key loading)
         let raw: RawConfig = match toml::from_str(&text) {
             Ok(r) => r,
-            Err(e) => {
+            Err(_) => {
+                // parse() reports the error (with the friendlier message for the
+                // pre-[[server]] layout); wipe the text only afterwards.
+                let r = Self::parse(&text, cache);
                 text.zeroize();
-                // Friendlier message for the pre-[[server]] layout.
-                if let Ok(v) = text.parse::<toml::Table>() {
-                    if v.get("server").map(|s| s.is_table()) == Some(true) {
-                        return Err(ConfigError::invalid(
-                            "`[server]` is now `[proxy]`; `[[server]]` (double brackets) lists the upstream Jellyfin servers",
-                        ));
-                    }
-                }
-                return Err(e.into());
+                return r;
             }
         };
 
@@ -918,6 +913,15 @@ mod tests {
         );
         std::fs::write(&cfg, "[logging\n").unwrap();
         assert_eq!(LoggingConfig::peek(&cfg), LoggingConfig::default());
+    }
+
+    #[test]
+    fn load_keeps_friendly_message_for_old_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("jmp.toml");
+        std::fs::write(&cfg, "[server]\nlisten = \"0.0.0.0:8096\"\n").unwrap();
+        let err = Config::load(&cfg, &PasswordCache::default()).unwrap_err();
+        assert!(err.to_string().contains("is now `[proxy]`"), "{err}");
     }
     #[test]
     fn first_run_detects_directory_instead_of_file() {
