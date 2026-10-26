@@ -7,7 +7,7 @@ USER root
 WORKDIR /src
 ARG JMP_GIT_SHA=unknown
 ENV JMP_GIT_SHA=${JMP_GIT_SHA}
-COPY Cargo.toml Cargo.lock build.rs ./
+COPY Cargo.toml Cargo.lock build.rs config.example.toml ./
 COPY src ./src
 COPY tests ./tests
 RUN --mount=type=cache,target=/root/.cargo/registry \
@@ -21,9 +21,11 @@ FROM cgr.dev/chainguard/glibc-dynamic:latest
 COPY --from=build /jellyfin-merge-proxy /usr/local/bin/jellyfin-merge-proxy
 COPY config.example.toml /usr/share/jellyfin-merge-proxy/config.example.toml
 ENV JMP_CONFIG=/config/config.toml
-# /config must contain config.toml; /config/data (data_dir) must be writable by
-# uid 65532. Certificates are usually mounted read-only at /config/certs and
-# referenced from [tls] / [server.tls] in config.toml.
+# Runs as any uid (e.g. `--user 99:100` on Unraid); it only writes under
+# /config. On first start without /config/config.toml it writes
+# /config/config.example.toml (if /config is writable) and exits with
+# instructions. Plain HTTP by default: certificates are optional and only
+# needed if config.toml enables [tls] or a [server.tls] ca_path/client cert.
 VOLUME ["/config"]
 EXPOSE 8096
 USER 65532:65532
