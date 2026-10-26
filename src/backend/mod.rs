@@ -4,6 +4,7 @@
 //! only ever sees `Arc<dyn MediaBackend>` (a runtime list built from
 //! `[[server]]`). Implementations:
 //! * [`jellyfin::JellyfinBackend`]: a real Jellyfin server over HTTP(S);
+//! * [`mock::MockBackend`]: in-memory, for tests and examples.
 //!
 //! A [`BackendFactory`] turns a `[[server]]` entry into a backend, so a new
 //! kind of server (Emby, a static catalog, ...) is one new impl + factory.
@@ -13,6 +14,7 @@
 
 pub mod credentials;
 pub mod jellyfin;
+pub mod mock;
 pub mod transport;
 
 use crate::config::{Config, UpstreamConfig};
