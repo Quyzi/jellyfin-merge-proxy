@@ -483,6 +483,26 @@ impl Default for LoggingConfig {
     }
 }
 
+impl LoggingConfig {
+    /// Best-effort read of just the `[logging]` table of the config file, so
+    /// logging can be set up before [`Config::load`] runs (which may log
+    /// warnings, e.g. while rewriting secrets). Falls back to defaults when
+    /// the file or the section cannot be parsed; `Config::load` reports the
+    /// real error afterwards.
+    pub fn peek(path: &Path) -> LoggingConfig {
+        #[derive(Deserialize)]
+        struct OnlyLogging {
+            #[serde(default)]
+            logging: LoggingConfig,
+        }
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| toml::from_str::<OnlyLogging>(&text).ok())
+            .map(|o| o.logging)
+            .unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MetricsConfig {
@@ -879,6 +899,26 @@ mod tests {
         assert!(first_run_help(&cfg).is_none());
     }
 
+    #[test]
+    fn logging_peek_reads_only_logging_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("jmp.toml");
+        std::fs::write(
+            &cfg,
+            "[proxy]\nunknown_key = 1\n\n[logging]\nfilter = \"debug\"\nformat = \"json\"\n",
+        )
+        .unwrap();
+        let l = LoggingConfig::peek(&cfg);
+        assert_eq!(l.filter, "debug");
+        assert_eq!(l.format, LogFormat::Json);
+        // Missing file or broken TOML: defaults, the real error comes from load().
+        assert_eq!(
+            LoggingConfig::peek(&dir.path().join("nope.toml")),
+            LoggingConfig::default()
+        );
+        std::fs::write(&cfg, "[logging\n").unwrap();
+        assert_eq!(LoggingConfig::peek(&cfg), LoggingConfig::default());
+    }
     #[test]
     fn first_run_detects_directory_instead_of_file() {
         let dir = tempfile::tempdir().unwrap();
