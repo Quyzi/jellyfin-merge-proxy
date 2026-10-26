@@ -42,7 +42,9 @@ pub fn rewrite_secrets(
             if let Some(password_item) = user_table.get_mut("password") {
                 if let Some(new_hash) = rewrite_user_password(password_item, &name, cache)? {
                     if let Some(val) = password_item.as_value_mut() {
+                        let decor = val.decor().clone();
                         *val = Value::from(new_hash);
+                        *val.decor_mut() = decor;
                         modified = true;
                         counter!(names::SECRETS_REWRITTEN, "kind" => "user_password").increment(1);
                     }
@@ -60,7 +62,9 @@ pub fn rewrite_secrets(
             if let Some(password_item) = server_table.get_mut("password") {
                 if let Some(encrypted) = rewrite_secret(password_item, cipher)? {
                     if let Some(val) = password_item.as_value_mut() {
+                        let decor = val.decor().clone();
                         *val = Value::from(encrypted);
+                        *val.decor_mut() = decor;
                         modified = true;
                         counter!(names::SECRETS_REWRITTEN, "kind" => "upstream_password")
                             .increment(1);
@@ -70,7 +74,9 @@ pub fn rewrite_secrets(
             if let Some(api_key_item) = server_table.get_mut("api_key") {
                 if let Some(encrypted) = rewrite_secret(api_key_item, cipher)? {
                     if let Some(val) = api_key_item.as_value_mut() {
+                        let decor = val.decor().clone();
                         *val = Value::from(encrypted);
+                        *val.decor_mut() = decor;
                         modified = true;
                         counter!(names::SECRETS_REWRITTEN, "kind" => "upstream_api_key")
                             .increment(1);
@@ -152,18 +158,18 @@ fn parse_raw_password(item: &Item) -> Result<RawPassword, ConfigError> {
 }
 
 /// Write `contents` to `path` atomically. Tries temp file + rename; falls back
-/// to in-place write for bind-mounted files where rename fails with EXDEV/EBUSY.
+/// to in-place write for bind-mounted files or read-only directories.
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), ConfigError> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
 
     // Try atomic rename first
     match write_via_temp(path, dir, contents) {
         Ok(()) => Ok(()),
-        Err(e) if is_cross_device_or_busy(&e) => {
-            // Bind-mounted file: fall back to in-place write
+        Err(e) if should_fallback_to_inplace(&e) => {
+            // Bind-mounted file or read-only directory: fall back to in-place write
             tracing::warn!(
                 path = %path.display(),
-                "temp file rename failed (likely bind-mounted); writing in place"
+                "temp file creation failed (bind-mount or read-only dir); writing in place"
             );
             write_in_place(path, contents)?;
             Ok(())
@@ -240,9 +246,16 @@ fn write_in_place(path: &Path, contents: &[u8]) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn is_cross_device_or_busy(e: &ConfigError) -> bool {
+fn should_fallback_to_inplace(e: &ConfigError) -> bool {
     if let ConfigError::Io { source, .. } = e {
-        matches!(source.raw_os_error(), Some(libc::EXDEV) | Some(libc::EBUSY))
+        matches!(
+            source.raw_os_error(),
+            Some(libc::EXDEV)   // Cross-device link (bind mount)
+            | Some(libc::EBUSY) // Device or resource busy
+            | Some(libc::EACCES) // Permission denied (e.g., /etc not writable by user)
+            | Some(libc::EPERM)  // Operation not permitted
+            | Some(libc::EROFS)  // Read-only file system (systemd ProtectSystem=strict)
+        )
     } else {
         false
     }

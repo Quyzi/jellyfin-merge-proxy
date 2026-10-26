@@ -565,13 +565,14 @@ pub fn first_run_help(path: &Path) -> Option<String> {
              This happens when Docker bind-mounts a non-existent file - Docker creates a directory instead.\n\
              Fix:\n\
              1. Stop the container\n\
-             2. Delete the directory: rm -rf {}\n\
-             3. Create the config file on the host: touch {} && chmod 644 {}\n\
-             4. Edit the file with your [[user]] and [[server]] entries (see config.example.toml)\n\
-             5. Start the container again\n\
+             2. On the HOST, delete the directory that was created at the host bind-mount path\n\
+             3. On the HOST, create the config file: touch <host-path>/jmp.toml\n\
+             4. Make it writable by the container user (uid 65532, or 99:100 on Unraid with --user): chown 65532:65532 <host-path>/jmp.toml\n\
+             5. Edit the file with your [[user]] and [[server]] entries (see config.example.toml)\n\
+             6. Start the container again\n\
              \n\
              Alternatively, set JMP_CONFIG to point to a file inside a mounted directory volume instead of a single-file bind mount.",
-            path.display(), path.display(), path.display(), path.display()
+            path.display()
         ));
     }
     
