@@ -115,3 +115,18 @@ jobs:
           tags: jellyfin-merge-proxy:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  actionlint:
+    name: Actionlint
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Lint workflows (with shellcheck)
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
+
