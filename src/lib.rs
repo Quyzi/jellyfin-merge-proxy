@@ -4,9 +4,12 @@
 //! See `ARCHITECTURE.md` for the trait seams. In short, [`AppState`] holds
 //! only trait objects / generic decorators:
 //! * backends: an `ArcSwap` of [`servers::BackendSet`] (`Arc<dyn backend::MediaBackend>`s
-//!   from a [`backend::BackendFactory`]);
+//!   from a [`backend::BackendFactory`]), kept in sync with `[[server]]` by
+//!   [`servers::BackendManager`];
 //! * ids: `Arc<dyn ids::IdMapper>`; users: `Arc<dyn users::ProxyAuthenticator>`;
 //! * catalog: `Arc<dyn cache::CatalogCache>`; TLS: `Arc<dyn tls::TlsProvider>`;
+//! * config: `Arc<dyn reload::ConfigSource>` + a [`reload::ReloadHub`] of
+//!   [`reload::Reloadable`] subscribers;
 //! * HTTP: an [`endpoints::Registry`] and a [`rewrite::RewriteChain`].
 
 pub mod auth;
@@ -38,6 +41,8 @@ pub mod upstream {
 }
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
@@ -46,20 +51,23 @@ use backend::{BackendFactory, JellyfinFactory, MediaBackend};
 use cache::CatalogCache;
 use config::{Config, PasswordCache};
 use ids::IdMapper;
-use metrics::gauge;
+use metrics::{counter, gauge};
+use reload::{ConfigSource, FileConfigSource, ReloadContext, ReloadHub};
 use serde_json::Value;
-use servers::{BackendSet, ServerRegistry, ServerState};
+use servers::{BackendManager, BackendSet, ServerRegistry, ServerState};
 use telemetry::names;
 use tls::{RustlsProvider, TlsProvider};
 use types::ServerId;
 use users::ProxyAuthenticator;
 
+pub use reload::TlsReloader;
+
 pub struct AppState {
     cfg: RwLock<Arc<Config>>,
     pub server_id: String,
     pub root_id: String,
-    /// The enabled `[[server]]`s; use [`AppState::backends`] to take a
-    /// snapshot for one request.
+    /// The enabled `[[server]]`s. Swapped atomically on reload; use
+    /// [`AppState::backends`] to take a snapshot for one request.
     backends: Arc<ArcSwap<BackendSet>>,
     /// Every server name ever configured in this process, by [`ServerId`].
     pub servers: Arc<ServerRegistry>,
@@ -73,10 +81,17 @@ pub struct AppState {
     pub rewriters: rewrite::RewriteChain,
     pub endpoints: endpoints::Registry,
     pub tls_provider: Arc<dyn TlsProvider>,
+    pub hub: ReloadHub,
+    pub listener_tls: Arc<reload::ListenerTls>,
     /// In-memory display preferences keyed by (user, id, client).
     pub display_prefs: Mutex<HashMap<String, Value>>,
+    pub generation: AtomicU64,
     pub started: Instant,
+    pub last_reload: Mutex<Option<(String, Option<String>)>>,
     password_cache: PasswordCache,
+    pub source: Option<Arc<dyn ConfigSource>>,
+    pub log: Option<telemetry::LogHandle>,
+    reload_lock: tokio::sync::Mutex<()>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -84,6 +99,10 @@ pub type Shared = Arc<AppState>;
 /// Optional overrides for every seam (all default to the production impls).
 #[derive(Default)]
 pub struct StateOptions {
+    /// Shorthand for `source: FileConfigSource::new(path)`.
+    pub config_path: Option<PathBuf>,
+    pub source: Option<Arc<dyn ConfigSource>>,
+    pub log: Option<telemetry::LogHandle>,
     pub password_cache: Option<PasswordCache>,
     pub backend_factory: Option<Arc<dyn BackendFactory>>,
     pub tls_provider: Option<Arc<dyn TlsProvider>>,
@@ -138,7 +157,30 @@ impl AppState {
         ));
         sessions.retain_users(&auth.ids());
         let catalog = opts.catalog.unwrap_or_else(|| cache::build(&cfg.cache));
+        let source = opts.source.or_else(|| {
+            opts.config_path
+                .map(|p| Arc::new(FileConfigSource::new(p)) as Arc<dyn ConfigSource>)
+        });
+        let listener_tls = Arc::new(reload::ListenerTls::default());
+
+        // Reload subscribers, in apply order.
         let backends = Arc::new(ArcSwap::from_pointee(BackendSet::new(backends)));
+        let hub = ReloadHub::default();
+        hub.subscribe(Arc::new(BackendManager::new(
+            backends.clone(),
+            registry.clone(),
+            factory.clone(),
+            catalog.clone(),
+        )));
+        hub.subscribe(auth.clone());
+        hub.subscribe(Arc::new(auth::SessionPruner {
+            sessions: sessions.clone(),
+            users: auth.clone(),
+        }));
+        hub.subscribe(Arc::new(reload::LogFilter(opts.log.clone())));
+        hub.subscribe(listener_tls.clone());
+        hub.subscribe(Arc::new(reload::CatalogCacheReload(catalog.clone())));
+        hub.subscribe(Arc::new(reload::RestartNotices));
 
         let st = Arc::new(AppState {
             cfg: RwLock::new(Arc::new(cfg)),
@@ -157,9 +199,16 @@ impl AppState {
                 .endpoints
                 .unwrap_or_else(endpoints::Registry::default_jellyfin),
             tls_provider,
+            hub,
+            listener_tls,
             display_prefs: Mutex::new(HashMap::new()),
+            generation: AtomicU64::new(1),
             started: Instant::now(),
+            last_reload: Mutex::new(None),
             password_cache: opts.password_cache.unwrap_or_default(),
+            source,
+            log: opts.log,
+            reload_lock: tokio::sync::Mutex::new(()),
         });
         st.publish_config_gauges();
         Ok(st)
@@ -201,6 +250,7 @@ impl AppState {
 
     fn publish_config_gauges(&self) {
         let cfg = self.cfg();
+        gauge!(names::CONFIG_GENERATION).set(self.generation.load(Ordering::Relaxed) as f64);
         gauge!(names::CONFIG_LAST_RELOAD).set(telemetry::unix_now());
         gauge!(names::CONFIG_UPSTREAMS)
             .set(cfg.upstreams.iter().filter(|u| u.enabled).count() as f64);
@@ -241,6 +291,55 @@ impl AppState {
                 }
             }
         });
+    }
+
+    /// Re-load the config from its source and apply it through the reload
+    /// hub. On any error the running config is kept unchanged.
+    /// `files_changed` = referenced files (TLS) changed on disk.
+    #[tracing::instrument(skip(self))]
+    pub async fn reload(self: &Shared, files_changed: bool) -> anyhow::Result<bool> {
+        let _g = self.reload_lock.lock().await;
+        let r = self.reload_inner(files_changed).await;
+        let outcome = match &r {
+            Ok(true) => "success",
+            Ok(false) => "unchanged",
+            Err(_) => "error",
+        };
+        counter!(names::CONFIG_RELOADS, "outcome" => outcome).increment(1);
+        *self.last_reload.lock().unwrap() =
+            Some((dto::now_iso(), r.as_ref().err().map(|e| format!("{e:#}"))));
+        if let Err(e) = &r {
+            tracing::error!("config reload failed, keeping previous config: {e:#}");
+        }
+        r
+    }
+
+    async fn reload_inner(self: &Shared, files_changed: bool) -> anyhow::Result<bool> {
+        let Some(src) = self.source.clone() else {
+            anyhow::bail!("no config source to reload from");
+        };
+        // Hashing new passwords is CPU heavy; keep it off the async workers.
+        let st = self.clone();
+        let new = tokio::task::spawn_blocking(move || src.load(&st.password_cache)).await??;
+        let old = self.cfg();
+        if *old == new && !files_changed {
+            return Ok(false);
+        }
+        let cx = ReloadContext {
+            old: &old,
+            new: &new,
+            files_changed,
+            tls: self.tls_provider.as_ref(),
+        };
+        self.hub.run(&cx).await?;
+        *self.cfg.write().unwrap() = Arc::new(new);
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        self.publish_config_gauges();
+        tracing::info!(
+            generation = self.generation.load(Ordering::Relaxed),
+            "config reloaded"
+        );
+        Ok(true)
     }
 }
 

@@ -135,12 +135,16 @@ async fn debug_handler(State(st): State<Shared>, req: Request) -> Response {
         "ttl_secs": settings.ttl.as_secs(),
         "max_entries": settings.max_entries,
     });
+    let last_reload = st.last_reload.lock().unwrap().clone();
     ok_json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "git_sha": telemetry::git_sha(),
         "uptime_secs": st.started.elapsed().as_secs(),
         "server_id": st.server_id,
         "config": {
+            "generation": st.generation.load(std::sync::atomic::Ordering::Relaxed),
+            "source": st.source.as_ref().map(|s| s.describe()),
+            "last_reload": last_reload.map(|(t, e)| json!({"at": t, "error": e})),
             "users": st.authenticator.list().into_iter().map(|u| u.name).collect::<Vec<_>>(),
             "merge": format!("{:?}", cfg.merge),
             "tls_listener": cfg.tls.is_some(),
@@ -161,6 +165,7 @@ async fn debug_handler(State(st): State<Shared>, req: Request) -> Response {
         "architecture": {
             "endpoints": st.endpoints.names(),
             "rewriters": st.rewriters.names(),
+            "reload_subscribers": st.hub.names(),
             "authenticator": st.authenticator.name(),
             "tls_provider": st.tls_provider.name(),
             "merge_strategy": merge::strategy_for(&cfg.merge).name(),
