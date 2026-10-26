@@ -534,7 +534,13 @@ async fn raw_views(st: &Shared, force: bool) -> Vec<(ServerId, Vec<Value>)> {
                 Lookup::Fresh(v) | Lookup::Stale(v) => Some(v),
                 Lookup::Miss => None,
             };
-            match fetch_views(up.as_ref()).await {
+            let res = fetch_views(up.as_ref()).await;
+            let outcome = match &res {
+                Ok(_) => "success",
+                Err(_) => "error",
+            };
+            counter!(names::FANOUT_RESULTS, "endpoint" => "views", "server" => up.name().to_string(), "outcome" => outcome).increment(1);
+            match res {
                 Ok(items) => {
                     st.catalog.put(key, Value::Array(items.clone()));
                     Some((up.id(), items))
@@ -551,7 +557,13 @@ async fn raw_views(st: &Shared, force: bool) -> Vec<(ServerId, Vec<Value>)> {
             }
         }
     });
-    join_all(futs).await.into_iter().flatten().collect()
+    let out: Vec<_> = join_all(futs).await.into_iter().flatten().collect();
+    // A server without views (down, no stale copy) makes every merged
+    // library silently partial: count it like any other partial fan-out.
+    if !out.is_empty() && out.len() < set.len() {
+        counter!(names::FANOUT_PARTIAL, "endpoint" => "views").increment(1);
+    }
+    out
 }
 
 fn items_of(id: ServerId, v: Value) -> Option<(ServerId, Vec<Value>)> {
