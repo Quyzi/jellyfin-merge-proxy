@@ -243,15 +243,6 @@ jobs:
           provenance: true
           sbom: true
 
-      - name: Sign image with cosign
-        uses: sigstore/cosign-installer@v3.8.2
-
-      - name: Sign the images
-        env:
-          COSIGN_EXPERIMENTAL: 1
-        run: |
-          echo "${{ steps.meta.outputs.tags }}" | xargs -I {} cosign sign --yes {}@${{ steps.build.outputs.digest }}
-
   release:
     name: Create GitHub Release
     runs-on: ubuntu-24.04
