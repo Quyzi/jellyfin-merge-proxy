@@ -26,7 +26,7 @@ ENV JMP_CONFIG=/etc/jmp.toml
 # /etc (config file bind-mount). First start without /etc/jmp.toml writes
 # jmp.example.toml next to it (if writable) and exits with instructions. Plain HTTP by
 # default: certificates optional, only needed if config enables [tls] or [server.tls].
-RUN mkdir -p /var/lib/jmp && chmod 777 /var/lib/jmp
+RUN mkdir -p /var/lib/jmp && chown 65532:65532 /var/lib/jmp && chmod 700 /var/lib/jmp
 VOLUME ["/var/lib/jmp"]
 EXPOSE 8096
 USER 65532:65532
