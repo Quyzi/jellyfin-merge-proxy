@@ -148,6 +148,7 @@ async fn debug_handler(State(st): State<Shared>, req: Request) -> Response {
             "password_hashes": st.password_cache().len(),
         },
         "sessions": st.sessions.list(),
+        "active_streams": telemetry::active_streams(),
         "architecture": {
             "endpoints": st.endpoints.names(),
             "rewriters": st.rewriters.names(),
@@ -1193,9 +1194,14 @@ pub async fn forward(
     let pq = path_with_query(&segs, &q);
     // Never log `pq` itself at info: it may carry ids; tokens were stripped above.
     tracing::debug!(upstream = %up.name(), method = %r.method, route = %telemetry::route_template(&segs.join("/")), "forwarding");
+    if headers.contains_key(header::RANGE) {
+        counter!(names::RANGE_REQUESTS, "server" => up.name().to_string()).increment(1);
+    }
+    let started = Instant::now();
     let req = BackendRequest::new(r.method.clone(), pq)
         .headers(headers)
-        .body(body);
+        .body(body)
+        .streaming(true);
     let resp = match up.send(req).await {
         Ok(resp) => resp,
         Err(e @ BackendError::Down { .. }) => {
@@ -1207,12 +1213,12 @@ pub async fn forward(
         }
         Err(e) => return Err(e.into()),
     };
-    relay(st, up.as_ref(), &uc, c, resp, &r).await
+    relay(st, up.as_ref(), &uc, c, resp, &r, started).await
 }
 
 /// Send a backend response to the client through the rewriter chain.
-/// JSON bodies are rewritten; anything else is passed through as-is
-/// (only header rewriters run).
+/// JSON and HLS playlists are buffered and rewritten; everything else is
+/// streamed (only header rewriters run).
 async fn relay(
     st: &Shared,
     up: &dyn MediaBackend,
@@ -1220,6 +1226,7 @@ async fn relay(
     c: &Client,
     resp: BackendResponse,
     r: &Req,
+    started: Instant,
 ) -> Result<Response> {
     let status = resp.status;
     let ctype = resp
@@ -1230,9 +1237,10 @@ async fn relay(
         .to_ascii_lowercase();
     let ctx = out_ctx(st, up, uc, c);
     let path = r.raw_path.to_ascii_lowercase();
-    let is_json = r.method != Method::HEAD && ctype.contains("application/json");
+    let is_playlist = rewrite::is_playlist(&ctype, &path);
+    let buffer = r.method != Method::HEAD && (ctype.contains("application/json") || is_playlist);
     let mut headers = HeaderMap::new();
-    if is_json {
+    if buffer {
         // Rewritten bodies get fresh headers: only the content type is kept
         // (lengths, encodings and validators no longer apply).
         if let Some(v) = resp.headers.get(header::CONTENT_TYPE) {
@@ -1248,13 +1256,19 @@ async fn relay(
     if let Some(v) = resp.headers.get(header::LOCATION) {
         headers.insert(header::LOCATION, v.clone());
     }
-    if is_json {
+    if buffer {
         let bytes = resp.bytes().await?;
         let _s = Stage::start("rewrite");
-        let Some(body) = serde_json::from_slice::<Value>(&bytes)
-            .ok()
-            .map(PayloadBody::Json)
-        else {
+        let body = if is_playlist {
+            Some(PayloadBody::Text(
+                String::from_utf8_lossy(&bytes).into_owned(),
+            ))
+        } else {
+            serde_json::from_slice::<Value>(&bytes)
+                .ok()
+                .map(PayloadBody::Json)
+        };
+        let Some(body) = body else {
             // Unparseable JSON: pass through untouched.
             let mut res = Response::new(Body::from(bytes));
             *res.status_mut() = status;
@@ -1269,7 +1283,10 @@ async fn relay(
             headers: &mut headers,
             body: Some(body),
         };
-        st.rewriters.apply(&mut p, &ctx);
+        let ran = st.rewriters.apply(&mut p, &ctx);
+        if ran.contains(&"hls") {
+            counter!(names::HLS_PLAYLIST_REWRITES, "server" => up.name().to_string()).increment(1);
+        }
         let mut res = match p.body.take() {
             Some(PayloadBody::Json(v)) => json_resp(status, &v),
             Some(PayloadBody::Text(t)) => {
@@ -1292,10 +1309,10 @@ async fn relay(
         }
         return Ok(res);
     }
-    // Everything else is passed through (buffered).
+    // Stream everything else through without buffering.
     let mut p = Payload {
-        content_type: ctype,
-        path,
+        content_type: ctype.clone(),
+        path: path.clone(),
         headers: &mut headers,
         body: None,
     };
@@ -1307,7 +1324,31 @@ async fn relay(
     let body = if r.method == Method::HEAD {
         Body::empty()
     } else {
-        Body::from(resp.bytes().await?)
+        let mut key = path;
+        if r.query
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("static") && v.eq_ignore_ascii_case("true"))
+        {
+            key.push_str("?static=true");
+        }
+        let kind = telemetry::stream_kind(&key, &ctype);
+        if kind == "hls_segment" {
+            counter!(names::HLS_SEGMENT_REQUESTS, "server" => up.name().to_string()).increment(1);
+        }
+        let who = c
+            .session
+            .as_ref()
+            .map(|s| format!("{} / {} ({})", s.user_name, s.client, s.device_name))
+            .unwrap_or_else(|| "anonymous".into());
+        let metered = telemetry::MeteredStream::new(
+            resp.body,
+            up.name(),
+            kind,
+            telemetry::route_template(&r.raw_path),
+            who,
+            started,
+        );
+        Body::from_stream(metered)
     };
     Ok(builder.body(body)?)
 }

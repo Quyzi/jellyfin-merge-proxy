@@ -1,9 +1,9 @@
-//! Rewriting of ids and URLs in JSON bodies and query strings.
+//! Rewriting of ids and URLs in JSON bodies, query strings and HLS playlists.
 //!
-//! The free functions ([`json_out`], [`url_out`], [`json_in`]) do the
-//! work; [`ResponseRewriter`] wraps them as composable stages
-//! ([`JsonIdRewriter`], [`LocationHeaderRewriter`]) run by a
-//! [`RewriteChain`]. Add a stage by
+//! The free functions ([`json_out`], [`url_out`], [`playlist_out`],
+//! [`json_in`]) do the work; [`ResponseRewriter`] wraps them as composable
+//! stages ([`JsonIdRewriter`], [`HlsPlaylistRewriter`],
+//! [`LocationHeaderRewriter`]) run by a [`RewriteChain`]. Add a stage by
 //! implementing the trait and pushing it onto the chain; wrap any stage in
 //! [`MeteredRewriter`] to count it.
 
@@ -235,6 +235,42 @@ pub fn encode_pairs(pairs: &[(String, String)]) -> String {
     s.finish()
 }
 
+/// Rewrite every URI in an HLS playlist (both plain lines and URI="..." attributes).
+pub fn playlist_out(text: &str, ctx: &OutCtx) -> String {
+    let mut out = String::with_capacity(text.len() + 256);
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            out.push_str(line);
+        } else if trimmed.starts_with('#') {
+            out.push_str(&rewrite_uri_attrs(line, ctx));
+        } else {
+            out.push_str(&url_out(trimmed, ctx, true));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn rewrite_uri_attrs(line: &str, ctx: &OutCtx) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(pos) = rest.find("URI=\"") {
+        let start = pos + 5;
+        out.push_str(&rest[..start]);
+        let after = &rest[start..];
+        if let Some(end) = after.find('"') {
+            out.push_str(&url_out(&after[..end], ctx, true));
+            rest = &after[end..];
+        } else {
+            rest = after;
+            break;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Context for rewriting client -> upstream.
 pub struct InCtx<'a> {
     pub ids: &'a dyn IdMapper,
@@ -295,7 +331,7 @@ pub enum PayloadBody {
 }
 
 /// What a rewriter sees: the response headers, and the body when it was
-/// buffered (JSON; other bodies pass with `body: None`).
+/// buffered (JSON and playlists; media streams pass with `body: None`).
 #[derive(Debug)]
 pub struct Payload<'p> {
     /// Lower-cased content type ("" if none).
@@ -304,6 +340,17 @@ pub struct Payload<'p> {
     pub path: String,
     pub headers: &'p mut HeaderMap,
     pub body: Option<PayloadBody>,
+}
+
+impl Payload<'_> {
+    pub fn is_playlist(&self) -> bool {
+        is_playlist(&self.content_type, &self.path)
+    }
+}
+
+/// Is this response an HLS playlist?
+pub fn is_playlist(content_type: &str, path: &str) -> bool {
+    content_type.contains("mpegurl") || (path.ends_with(".m3u8") && !content_type.contains("json"))
 }
 
 /// One stage of response rewriting.
@@ -328,6 +375,36 @@ impl ResponseRewriter for JsonIdRewriter {
         if let Some(PayloadBody::Json(v)) = &mut p.body {
             json_out(v, cx);
         }
+    }
+}
+
+/// URIs inside HLS playlists (segments get the client's token).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HlsPlaylistRewriter;
+
+impl ResponseRewriter for HlsPlaylistRewriter {
+    fn name(&self) -> &'static str {
+        "hls"
+    }
+    fn applies(&self, p: &Payload<'_>) -> bool {
+        matches!(p.body, Some(PayloadBody::Text(_))) && p.is_playlist()
+    }
+    fn rewrite(&self, p: &mut Payload<'_>, cx: &OutCtx<'_>) {
+        if let Some(PayloadBody::Text(t)) = &mut p.body {
+            *t = playlist_out(t, cx);
+        }
+        let ct = if p.content_type.is_empty() {
+            "application/vnd.apple.mpegurl"
+        } else {
+            p.content_type.as_str()
+        };
+        p.headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_str(ct)
+                .unwrap_or(HeaderValue::from_static("application/vnd.apple.mpegurl")),
+        );
+        p.headers
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     }
 }
 
@@ -401,10 +478,11 @@ impl RewriteChain {
     pub fn empty() -> Self {
         RewriteChain { stages: Vec::new() }
     }
-    /// JSON ids, Location headers; each metered.
+    /// JSON ids, HLS playlists, Location headers; each metered.
     pub fn default_chain() -> Self {
         Self::empty()
             .with(MeteredRewriter(JsonIdRewriter))
+            .with(MeteredRewriter(HlsPlaylistRewriter))
             .with(MeteredRewriter(LocationHeaderRewriter))
     }
     pub fn with(mut self, r: impl ResponseRewriter + 'static) -> Self {
@@ -521,11 +599,32 @@ mod tests {
     }
 
     #[test]
+    fn playlist_rewrite() {
+        let ids = IdMap::new(crate::servers::ServerRegistry::with_names(["a"]));
+        let c = ctx(&ids);
+        let item = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let pi = ids.to_proxy(ServerId(0), item);
+        let pl = "#EXTM3U\n#EXT-X-MAP:URI=\"hls1/main/-1.mp4?MediaSourceId=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n#EXTINF:6.0,\nhls1/main/0.ts?MediaSourceId=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&api_key=UP\nhttp://up:8096/jf/videos/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/hls1/main/1.ts\nhttps://cdn.example/x.ts\n";
+        let out = playlist_out(pl, &c);
+        assert!(out.contains(&format!(
+            "URI=\"hls1/main/-1.mp4?MediaSourceId={pi}&api_key=CLIENTTOKEN\""
+        )));
+        assert!(out.contains(&format!(
+            "\nhls1/main/0.ts?MediaSourceId={pi}&api_key=CLIENTTOKEN\n"
+        )));
+        assert!(out.contains(&format!(
+            "\n/videos/{pi}/hls1/main/1.ts?api_key=CLIENTTOKEN\n"
+        )));
+        assert!(out.contains("\nhttps://cdn.example/x.ts\n"));
+        assert!(!out.contains("UP\n"));
+    }
+
+    #[test]
     fn chain_runs_applicable_stages() {
         let ids = IdMap::new(crate::servers::ServerRegistry::with_names(["a"]));
         let c = ctx(&ids);
         let chain = RewriteChain::default_chain();
-        assert_eq!(chain.names(), vec!["json_ids", "location"]);
+        assert_eq!(chain.names(), vec!["json_ids", "hls", "location"]);
         let item = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let mut h = HeaderMap::new();
         h.insert(
@@ -546,6 +645,20 @@ mod tests {
             Some(PayloadBody::Json(serde_json::json!({"Id": pi})))
         );
         assert_eq!(h[header::LOCATION], format!("/Items/{pi}").as_str());
+
+        let mut h = HeaderMap::new();
+        let mut p = Payload {
+            content_type: String::new(),
+            path: "/videos/x/main.m3u8".into(),
+            headers: &mut h,
+            body: Some(PayloadBody::Text("seg.ts\n".into())),
+        };
+        assert_eq!(chain.apply(&mut p, &c), vec!["hls"]);
+        assert_eq!(
+            p.body,
+            Some(PayloadBody::Text("seg.ts?api_key=CLIENTTOKEN\n".into()))
+        );
+        assert_eq!(h[header::CACHE_CONTROL], "no-cache");
     }
 
     struct Upper;
