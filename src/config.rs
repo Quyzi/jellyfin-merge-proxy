@@ -575,7 +575,7 @@ pub fn first_run_help(path: &Path) -> Option<String> {
             path.display()
         ));
     }
-    
+
     if path.exists() {
         return None;
     }
@@ -877,6 +877,20 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&example).unwrap(), "# mine");
         std::fs::write(&cfg, "").unwrap();
         assert!(first_run_help(&cfg).is_none());
+    }
+
+    #[test]
+    fn first_run_detects_directory_instead_of_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_dir = dir.path().join("jmp.toml");
+        // Create a directory with the config name (simulates Docker bind mount issue)
+        std::fs::create_dir(&cfg_dir).unwrap();
+
+        let msg = first_run_help(&cfg_dir).unwrap();
+        assert!(msg.contains("is a directory, not a file"), "{msg}");
+        assert!(msg.contains("Docker bind-mounts"), "{msg}");
+        assert!(msg.contains("HOST"), "{msg}");
+        assert!(msg.contains("65532"), "{msg}");
     }
 
     #[test]
