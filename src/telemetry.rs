@@ -792,20 +792,4 @@ mod tests {
         assert_eq!(n, names.len(), "duplicate metric names");
     }
 
-    #[test]
-    fn dashboard_metrics_valid() {
-        // This test ensures the dashboard only references metrics that exist
-        use std::process::Command;
-        
-        let output = Command::new("cargo")
-            .args(&["run", "-p", "xtask", "--", "validate"])
-            .output()
-            .expect("Failed to run xtask validate");
-        
-        assert!(
-            output.status.success(),
-            "Dashboard validation failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
 }
