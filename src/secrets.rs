@@ -88,8 +88,24 @@ pub struct DefaultKeyStore;
 
 impl KeyStore for DefaultKeyStore {
     fn load(&self, data_dir: &Path) -> Result<EncryptionKey, ConfigError> {
+        self.load_with_env(std::env::var("JMP_SECRET_KEY").ok(), data_dir)
+    }
+
+    fn describe(&self) -> String {
+        "JMP_SECRET_KEY env var or /var/lib/jmp/secret.key".into()
+    }
+}
+
+impl DefaultKeyStore {
+    /// [`KeyStore::load`] with the `JMP_SECRET_KEY` value passed in, so tests
+    /// never have to change the (process-wide) environment.
+    fn load_with_env(
+        &self,
+        env_key: Option<String>,
+        data_dir: &Path,
+    ) -> Result<EncryptionKey, ConfigError> {
         // 1. Try env var first
-        if let Ok(hex) = std::env::var("JMP_SECRET_KEY") {
+        if let Some(hex) = env_key {
             tracing::info!("loading encryption key from JMP_SECRET_KEY env var");
             return EncryptionKey::from_hex(&hex);
         }
@@ -170,10 +186,6 @@ impl KeyStore for DefaultKeyStore {
 
         tracing::info!(path = %key_path.display(), "saved auto-generated encryption key");
         Ok(key)
-    }
-
-    fn describe(&self) -> String {
-        "JMP_SECRET_KEY env var or /var/lib/jmp/secret.key".into()
     }
 }
 
@@ -308,12 +320,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let ks = DefaultKeyStore;
         let key1 = EncryptionKey::generate();
-        std::env::set_var("JMP_SECRET_KEY", key1.to_hex());
-        let k = ks.load(dir.path()).unwrap();
+        let k = ks.load_with_env(Some(key1.to_hex()), dir.path()).unwrap();
         assert_eq!(k.as_bytes(), key1.as_bytes());
         // File is not created when env var is present
         assert!(!dir.path().join("secret.key").exists());
-        std::env::remove_var("JMP_SECRET_KEY");
     }
 
     #[test]
