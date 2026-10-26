@@ -3,10 +3,14 @@
 //! [`PasswordHasher`] / [`PasswordVerifier`] are the seams; [`Argon2id`] is
 //! the implementation and [`MeteredHasher`] adds `jmp_argon2_duration_seconds`
 //! to any hasher. [`HashedPassword`] is the only type login verification
-//! accepts.
+//! accepts; plaintexts from the TOML are hashed once at load (cached across
+//! reloads by [`PasswordCache`]) and zeroized.
 
 use crate::error::PasswordError;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fmt;
+use std::sync::Mutex;
 use std::time::Instant;
 use zeroize::Zeroize;
 
@@ -140,9 +144,99 @@ impl HashedPassword {
     }
 }
 
+/// Caches plaintext -> hash conversions across reloads so unchanged users
+/// are not re-hashed. Keys are `sha256(process_key || user || plaintext)`,
+/// with a random per-process key, so the cache holds no plaintext.
+/// Generic over the hasher (static dispatch).
+pub struct PasswordCache<H: PasswordHasher = DefaultHasher> {
+    key: [u8; 32],
+    hasher: H,
+    map: Mutex<HashMap<[u8; 32], HashedPassword>>,
+}
+
+impl Default for PasswordCache<DefaultHasher> {
+    fn default() -> Self {
+        PasswordCache::with_hasher(DefaultHasher::default())
+    }
+}
+
+impl<H: PasswordHasher> PasswordCache<H> {
+    pub fn with_hasher(hasher: H) -> Self {
+        use rand::RngCore;
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        PasswordCache {
+            key,
+            hasher,
+            map: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn digest(&self, user: &str, plain: &str) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(self.key);
+        h.update(user.to_lowercase().as_bytes());
+        h.update([0u8]);
+        h.update(plain.as_bytes());
+        h.finalize().into()
+    }
+
+    /// Convert a raw config password into a hash, reusing a cached hash if
+    /// the same plaintext was seen before for this user.
+    pub fn normalize(
+        &self,
+        user: &str,
+        raw: &crate::config::RawPassword,
+    ) -> Result<HashedPassword, PasswordError> {
+        use crate::config::{RawPassword, TaggedPassword};
+        let plain = match raw {
+            RawPassword::Tagged(TaggedPassword::Argon2(h)) => return self.hasher.parse(h),
+            RawPassword::Bare(s) if s.starts_with("$argon2") => return self.hasher.parse(s),
+            RawPassword::Bare(p) | RawPassword::Tagged(TaggedPassword::Plain(p)) => p,
+        };
+        let d = self.digest(user, plain);
+        if let Some(h) = self.map.lock().unwrap().get(&d) {
+            return Ok(h.clone());
+        }
+        let h = self.hasher.hash(&Password::new(plain.as_str()))?;
+        self.map.lock().unwrap().insert(d, h.clone());
+        Ok(h)
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.lock().unwrap().len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fake hasher proves the cache is generic over the trait.
+    #[derive(Default)]
+    struct Fake;
+    impl PasswordHasher for Fake {
+        fn hash(&self, p: &Password) -> Result<HashedPassword, PasswordError> {
+            Ok(HashedPassword(format!("$fake${}", p.expose().len())))
+        }
+        fn parse(&self, phc: &str) -> Result<HashedPassword, PasswordError> {
+            Ok(HashedPassword(phc.into()))
+        }
+    }
+
+    #[test]
+    fn cache_is_generic_and_debug_redacts() {
+        let c = PasswordCache::with_hasher(Fake);
+        let raw = crate::config::RawPassword::Bare("hunter2".into());
+        let h = c.normalize("u", &raw).unwrap();
+        assert_eq!(h.phc(), "$fake$7");
+        assert_eq!(c.len(), 1);
+        assert!(!format!("{:?}", Password::new("hunter2")).contains("hunter2"));
+        assert!(!format!("{h:?}").contains("fake$7"));
+    }
 
     #[test]
     fn argon2_round_trip() {

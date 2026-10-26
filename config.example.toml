@@ -1,0 +1,180 @@
+# jellyfin-merge-proxy example configuration.
+# Copy to ./config/config.toml (docker) or point JMP_CONFIG / --config at it.
+
+# ---------------------------------------------------------------------------
+# The proxy itself (the virtual server clients see).
+# ---------------------------------------------------------------------------
+[proxy]
+# Address and port clients connect to. 8096 is Jellyfin's default, so TV apps
+# that probe the default port find it.
+listen = "0.0.0.0:8096"
+# Name shown in clients' server list.
+name = "Jellyfin Merge Proxy"
+# Stable 32-hex server id. Optional: derived from `name` if omitted.
+# Clients key saved servers by this id, so don't change it once in use.
+# id = "4a1f0c2e9b7d4e6f8a3c5b1d2e7f9a0c"
+# Jellyfin version reported to clients (clients gate features on it).
+reported_version = "10.10.7"
+# Where the id lookup table (ids.tsv) and client sessions (sessions.json)
+# are stored. Keep it on a volume so ids/logins survive restarts.
+data_dir = "/config/data"
+# Routes the proxy doesn't implement and that carry no known item id:
+#   "primary" = forward to the first reachable upstream (default)
+#   "empty"   = answer with an empty result / 204
+unknown_routes = "primary"
+# Timeout for upstream API calls (not streams), seconds.
+upstream_timeout_secs = 30
+# How often (seconds) the config file and every certificate/key/CA file it
+# references are checked for changes and hot-reloaded. 0 = only on SIGHUP.
+# A reload that fails validation is logged and the previous config is kept.
+# Adding/removing a [[server]] block or changing its `server` URL is applied
+# live; see README "Hot reload".
+reload_interval_secs = 3
+# After a [[server]] is removed (or its URL changes), requests/streams already
+# running on it may finish for up to this many seconds before its upstream
+# session is ended.
+drain_timeout_secs = 300
+
+# ---------------------------------------------------------------------------
+# Proxy accounts. These are what you type into the Jellyfin app.
+# They are independent from upstream accounts. One entry = a shared login.
+#
+# password may be:
+#   password = "plaintext"
+#   password = { plain = "plaintext" }
+#   password = { argon2 = "$argon2id$v=19$m=19456,t=2,p=1$..." }
+#   password = "$argon2id$..."          (bare PHC strings are detected)
+# Plaintext values are hashed with argon2id (random salt) as soon as the file
+# is read; only the hash is kept in memory and the plaintext buffer is
+# zeroized. The file on disk is never rewritten - prefer storing a hash.
+# Generate one e.g. with:  echo -n 'secret' | argon2 "$(openssl rand -hex 8)" -id -e
+# ---------------------------------------------------------------------------
+[[user]]
+name = "family"
+password = "change-me"
+
+[[user]]
+name = "chris"
+password = { plain = "also-change-me" }
+
+# ---------------------------------------------------------------------------
+# Upstream Jellyfin servers, one [[server]] block each (`[[upstream]]` is
+# accepted as an alias). Order matters: the first one is the "primary"
+# (fallback target for unknown routes, serves /web), and by default the
+# preferred copy when deduplicating.
+#
+#   name     short, stable name. It is hashed into every id the proxy hands
+#            out: renaming a server invalidates client-cached ids for it.
+#   server   base URL (a sub-path like https://host/jellyfin works too)
+#   user     upstream login name
+#   password upstream password (plaintext: it is sent to the upstream, so it
+#            cannot be stored hashed)
+#   api_key  optional, instead of password (Dashboard -> API Keys); `user`
+#            or `user_id` then picks whose library and watch state are used
+#
+# With user + password the proxy logs in, caches the token and logs in
+# again automatically on 401.
+# ---------------------------------------------------------------------------
+[[server]]
+name = "gummybear"
+server = "https://some-domain:8493"
+user = "gummybear"
+password = "meow"
+# priority = 0        # lower wins when deduplicating (default: position)
+# enabled = true
+
+[[server]]
+name = "friend"
+server = "https://jellyfin.example.com"
+user = "chris"
+api_key = "0123456789abcdef0123456789abcdef"
+# user_id = "f00dfeedf00dfeedf00dfeedf00dfeed"   # alternative to `user` with api_key
+priority = 10
+
+# Per-server TLS. Every field is optional and overrides [upstream_tls].
+# [server.tls]              # applies to the [[server]] right above it
+# ca_path = "/config/certs/friend-ca.pem"   # extra trusted CA (PEM), added to the system roots
+# server_name = "jellyfin.internal"         # verify the cert against this name instead of the URL host
+# client_cert_path = "/config/certs/proxy-client.pem"   # mTLS client certificate chain (PEM)
+# client_key_path  = "/config/certs/proxy-client.key"   # its private key (PKCS#8, PKCS#1 or SEC1 PEM)
+# min_version = "1.2"                       # "1.2" or "1.3"
+# insecure_skip_verify = false              # NEVER verify certificates. Logged as a loud warning.
+
+[merge]
+# Combine libraries with the same name and collection type ("Movies" on both
+# servers -> one "Movies" library).
+merge_libraries_by_name = true
+# Hide duplicate movies/series that exist on several servers (matched by
+# Tmdb/Imdb/Tvdb provider ids); the copy from the lowest `priority` wins.
+dedupe = false
+dedupe_types = ["Movie", "Series"]
+# When libraries are NOT merged but share a name, append " (upstream name)".
+label_colliding_libraries = true
+# When a merged list must be re-paged, StartIndex+Limit items are requested
+# from every upstream (capped to this value).
+fanout_limit = 5000
+
+# ---------------------------------------------------------------------------
+# Catalog cache: library views fetched from each server are cached so the
+# home screen doesn't fan out to every upstream on each request.
+# ---------------------------------------------------------------------------
+[cache]
+enabled = true
+ttl_secs = 60                  # entry lifetime; refreshed on next use after this
+refresh_interval_secs = 0      # >0 = refresh in the background every N seconds
+max_entries = 1000             # oldest entries are evicted beyond this
+serve_stale_on_error = true    # serve an expired entry if the refresh fails
+# persist_path = "/config/data/catalog.json"   # keep the cache across restarts
+
+# ---------------------------------------------------------------------------
+# Inbound TLS (optional). Without this section the proxy serves plain HTTP.
+# rustls only (no OpenSSL). The cert/key/CA files are watched and hot-reloaded
+# without dropping the listener; a broken new cert is rejected and the old one
+# stays active. Turning TLS on/off or changing `listen` needs a restart.
+# ---------------------------------------------------------------------------
+# [tls]
+# cert_path = "/config/certs/fullchain.pem"   # leaf first, then intermediates (PEM)
+# key_path  = "/config/certs/privkey.pem"     # PKCS#8, PKCS#1 (RSA) or SEC1 (EC) PEM
+# min_version = "1.2"                         # "1.2" (default) or "1.3"
+# client_auth = "none"                        # "none" | "optional" | "required" (mTLS)
+# client_ca_path = "/config/certs/clients-ca.pem"   # required unless client_auth = "none"
+# http2 = true                                # offer h2 via ALPN (false = HTTP/1.1 only)
+# redirect_http_listen = "0.0.0.0:8080"       # optional plain-HTTP port answering 308 -> https
+
+# ---------------------------------------------------------------------------
+# Defaults for TLS connections to every [[server]] (same keys as [server.tls]).
+# ---------------------------------------------------------------------------
+# [upstream_tls]
+# ca_path = "/config/certs/homelab-ca.pem"
+# min_version = "1.2"
+# insecure_skip_verify = false
+
+# ---------------------------------------------------------------------------
+# Logging. RUST_LOG, when set, overrides `filter`. `filter` is hot-reloaded;
+# `format`/`ansi` need a restart. Secrets (passwords, tokens, API keys,
+# Authorization headers) are never logged.
+# ---------------------------------------------------------------------------
+[logging]
+filter = "info"          # EnvFilter syntax, e.g. "info,jmp=debug,tower_http=debug"
+format = "pretty"        # "pretty" | "compact" | "json"
+# ansi = true            # colours; default: on for pretty/compact, off for json
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics (see METRICS.md for the full list).
+# ---------------------------------------------------------------------------
+[metrics]
+enabled = true
+path = "/metrics"
+# listen = "0.0.0.0:9090"   # serve metrics only on this separate plain-HTTP port
+require_auth = false        # true = scraper must send a proxy token (X-Emby-Token / api_key)
+process_metrics = true      # process_cpu_seconds_total, process_resident_memory_bytes, ...
+
+# ---------------------------------------------------------------------------
+# Debug / introspection endpoint: JSON dump of upstream health, caches, id
+# table sizes, config generation, sessions (redacted) and active streams.
+# Off by default. Always requires a proxy login token.
+# ---------------------------------------------------------------------------
+[debug]
+enabled = false
+path = "/jmp/debug"
+# users = ["chris"]         # restrict to these proxy users (empty = any proxy user)
