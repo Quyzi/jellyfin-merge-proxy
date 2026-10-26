@@ -28,16 +28,45 @@ services:
       # Or e.g. certificates managed by certbot / Caddy on the host:
       # - /etc/letsencrypt/live/media.example.com:/config/certs/le:ro
 
-  # Optional Prometheus scraping /metrics. Uncomment together with the volume below.
-  # prometheus:
-  #   image: cgr.dev/chainguard/prometheus:latest
-  #   restart: unless-stopped
-  #   command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
-  #   ports:
-  #     - "9091:9090"
-  #   volumes:
-  #     - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-  #     - prometheus-data:/prometheus
+  # Optional Prometheus scraping /metrics and Grafana for visualization.
+  # Uncomment to enable full observability stack.
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: jmp-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - jellyfin-merge-proxy
 
-# volumes:
-#   prometheus-data:
+  grafana:
+    image: grafana/grafana:latest
+    container_name: jmp-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/jellyfin-merge-proxy.json:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus-data:
+  grafana-data:
