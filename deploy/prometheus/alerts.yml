@@ -1,99 +1,111 @@
+# Prometheus alerting rules for jellyfin-merge-proxy (loaded by deploy/prometheus.yml).
+# Check with:  promtool check rules deploy/prometheus/alerts.yml
+# Metric and label names are validated against the proxy by `cargo xtask check`.
 groups:
   - name: jellyfin-merge-proxy
     interval: 30s
     rules:
+      - alert: ProxyDown
+        expr: up{job="jellyfin-merge-proxy"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "jellyfin-merge-proxy {{ $labels.instance }} is not being scraped"
+          description: "Prometheus could not scrape {{ $labels.instance }} for 2 minutes: the proxy is down, or the metrics listener/path/auth changed."
+
       - alert: UpstreamServerDown
-        expr: jmp_upstream_up == 0
+        expr: max by (instance, server) (jmp_upstream_up) == 0
         for: 2m
         labels:
           severity: warning
         annotations:
           summary: "Upstream server {{ $labels.server }} is down"
-          description: "The upstream server {{ $labels.server }} has been down for more than 2 minutes. Health check failed or server is in back-off."
-      
+          description: "{{ $labels.server }} has been in back-off (failed health checks) for more than 2 minutes. Note: a [[server]] removed by a config reload also reads 0 until the proxy restarts."
+
+      - alert: NoHealthyUpstreams
+        # sum(), not count(up == 1) == 0: count() of nothing is empty, not 0, so that never fired.
+        expr: sum by (instance) (jmp_upstream_up) == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No healthy upstream servers on {{ $labels.instance }}"
+          description: "Every upstream server is down or unreachable. The proxy cannot serve content."
+
       - alert: HighErrorRate
         expr: |
-          sum(rate(jmp_http_requests_total{status=~"5.."}[5m]))
+          sum by (instance) (rate(jmp_http_requests_total{status=~"5.."}[5m]))
           /
-          sum(rate(jmp_http_requests_total[5m]))
+          sum by (instance) (rate(jmp_http_requests_total[5m]))
           > 0.05
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "High HTTP error rate detected"
-          description: "More than 5% of requests are returning 5xx errors for the last 5 minutes. Current rate: {{ $value | humanizePercentage }}"
-      
-      - alert: TLSCertificateExpiringSoon
-        expr: (jmp_tls_cert_expiry_timestamp_seconds - time()) / 86400 < 14
-        for: 1h
-        labels:
-          severity: warning
-        annotations:
-          summary: "TLS certificate {{ $labels.cert }} expiring soon"
-          description: "Certificate {{ $labels.cert }} will expire in {{ $value | humanizeDuration }}. Renew it before it expires."
-      
-      - alert: TLSCertificateExpiringVerySOON
-        expr: (jmp_tls_cert_expiry_timestamp_seconds - time()) / 86400 < 7
-        for: 1h
-        labels:
-          severity: critical
-        annotations:
-          summary: "TLS certificate {{ $labels.cert }} expiring very soon!"
-          description: "Certificate {{ $labels.cert }} will expire in {{ $value | humanizeDuration }}. URGENT: Renew immediately!"
-      
-      - alert: ConfigReloadFailed
-        expr: increase(jmp_config_reloads_total{outcome="error"}[10m]) > 0
-        for: 1m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Config reload failed"
-          description: "The proxy failed to reload its configuration. Check logs for errors. The previous config is still in effect."
-      
-      - alert: HighStreamDisconnectRate
-        expr: |
-          sum(rate(jmp_stream_end_total{outcome="client_disconnect"}[5m]))
-          /
-          sum(rate(jmp_stream_end_total[5m]))
-          > 0.3
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High rate of stream disconnects"
-          description: "More than 30% of streams are ending with client disconnects for the last 10 minutes. Current rate: {{ $value | humanizePercentage }}"
-      
-      - alert: CacheHitRatioLow
-        expr: |
-          sum(rate(jmp_cache_requests_total{outcome="hit"}[10m]))
-          /
-          sum(rate(jmp_cache_requests_total[10m]))
-          < 0.3
-        for: 15m
-        labels:
-          severity: info
-        annotations:
-          summary: "Low cache hit ratio"
-          description: "Cache hit ratio has been below 30% for 15 minutes. Current ratio: {{ $value | humanizePercentage }}. Consider tuning cache settings."
-      
+          summary: "High HTTP 5xx ratio on {{ $labels.instance }}"
+          description: "More than 5% of client requests returned 5xx for 5 minutes. Current ratio: {{ $value | humanizePercentage }}"
+
       - alert: UpstreamHighLatency
         expr: |
           histogram_quantile(0.95,
-            sum by (le, server) (rate(jmp_upstream_request_duration_seconds_bucket[5m]))
+            sum by (instance, le, server) (rate(jmp_upstream_request_duration_seconds_bucket[5m]))
           ) > 5
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "High upstream latency on {{ $labels.server }}"
-          description: "p95 latency for upstream {{ $labels.server }} has been above 5 seconds for 10 minutes. Current p95: {{ $value }}s"
-      
-      - alert: NoHealthyUpstreams
-        expr: count(jmp_upstream_up == 1) == 0
-        for: 1m
+          description: "p95 latency of upstream {{ $labels.server }} has been above 5 seconds for 10 minutes. Current p95: {{ $value | humanizeDuration }}"
+
+      - alert: TLSCertificateExpiringSoon
+        expr: (jmp_tls_cert_expiry_timestamp_seconds - time()) / 86400 < 14
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate {{ $labels.cert }} expires in under 14 days"
+          description: "Certificate {{ $labels.cert }} expires in {{ $value | printf \"%.1f\" }} days. Renew it; the proxy reloads the files automatically."
+
+      - alert: TLSCertificateExpiringVerySoon
+        expr: (jmp_tls_cert_expiry_timestamp_seconds - time()) / 86400 < 7
+        for: 1h
         labels:
           severity: critical
         annotations:
-          summary: "No healthy upstream servers available"
-          description: "All upstream servers are down or unreachable. The proxy cannot serve content."
+          summary: "TLS certificate {{ $labels.cert }} expires in under 7 days"
+          description: "Certificate {{ $labels.cert }} expires in {{ $value | printf \"%.1f\" }} days. Renew it now."
+
+      - alert: ConfigReloadFailed
+        expr: increase(jmp_config_reloads_total{outcome="error"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Config reload failed on {{ $labels.instance }}"
+          description: "The proxy rejected an edited config.toml in the last 10 minutes and kept the previous config. Check the logs."
+
+      - alert: HighStreamDisconnectRate
+        expr: |
+          sum by (instance) (rate(jmp_stream_end_total{outcome="client_disconnect"}[5m]))
+          /
+          sum by (instance) (rate(jmp_stream_end_total[5m]))
+          > 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Many streams end with a client disconnect"
+          description: "More than 30% of proxied streams ended with the client disconnecting for 10 minutes ({{ $value | humanizePercentage }}). Often a slow upstream or network."
+
+      - alert: CacheHitRatioLow
+        expr: |
+          sum by (instance) (rate(jmp_cache_requests_total{outcome="hit"}[10m]))
+          /
+          sum by (instance) (rate(jmp_cache_requests_total[10m]))
+          < 0.3
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Low catalog cache hit ratio"
+          description: "Cache hit ratio has been below 30% for 15 minutes ({{ $value | humanizePercentage }}). Consider a longer [cache] ttl."
