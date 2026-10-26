@@ -52,6 +52,8 @@ pub mod names {
     pub const CACHE_LAST_REFRESH: &str = "jmp_cache_last_refresh_timestamp_seconds";
     pub const CACHE_EVICTIONS: &str = "jmp_cache_evictions_total";
     pub const PERSIST_OPS: &str = "jmp_persist_ops_total";
+    pub const DB_JOURNAL_MODE: &str = "jmp_db_journal_mode";
+    pub const DB_SCHEMA_VERSION: &str = "jmp_db_schema_version";
 
     pub const UPSTREAM_REQUESTS: &str = "jmp_upstream_requests_total";
     pub const UPSTREAM_DURATION: &str = "jmp_upstream_request_duration_seconds";
@@ -156,7 +158,9 @@ pub const METRICS: &[MetricDef] = &[
     m!(CACHE_REFRESH_FAILURES, Counter, "cache, server", "Failed catalog refreshes."),
     m!(CACHE_LAST_REFRESH, Gauge, "cache, server", "Unix time of the last successful catalog refresh."),
     m!(CACHE_EVICTIONS, Counter, "cache", "Catalog cache entries replaced/evicted."),
-    m!(PERSIST_OPS, Counter, "store, op, outcome", "Persistence operations (ids/sessions load and save)."),
+    m!(PERSIST_OPS, Counter, "store, op, outcome", "Persistence operations (ids, siblings and sessions: load and save)."),
+    m!(DB_JOURNAL_MODE, Gauge, "mode", "1 for the SQLite journal mode in effect (read back from SQLite after applying `[database] journal_mode`), 0 for the other modes."),
+    m!(DB_SCHEMA_VERSION, Gauge, "", "Schema version of the state database after migrations."),
     m!(UPSTREAM_REQUESTS, Counter, "server, endpoint, status_class", "HTTP requests sent to upstreams by route template and status class (2xx..5xx, error)."),
     m!(UPSTREAM_DURATION, Histogram, "server, endpoint", "Upstream time to response headers."),
     m!(UPSTREAM_ERRORS, Counter, "server, kind", "Upstream transport errors: connect, dns, tls, timeout, body, other."),
