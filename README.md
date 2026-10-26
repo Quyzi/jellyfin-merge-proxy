@@ -313,6 +313,10 @@ labels.
 
 ### Observability Stack
 
+The dashboard provides comprehensive visibility into proxy operations following the RED method
+(Rate, Errors, Duration) for services and USE method (Utilization, Saturation, Errors) for
+infrastructure resources.
+
 Run Prometheus + Grafana with the proxy:
 
 ```sh
@@ -332,7 +336,17 @@ Default Grafana credentials: `admin` / `changeme` (set `GRAFANA_ADMIN_USER` and
 `GRAFANA_ADMIN_PASSWORD` in `.env` to change).
 
 The Grafana dashboard at **`deploy/grafana-dashboard.json`** is automatically
-provisioned and includes:
+provisioned on startup and provides:
+
+- **71 panels** across 10 collapsible rows
+- **Template variables** for filtering by datasource, server, route, and instance
+- **Annotations** for config reloads and server state changes
+- **Efficient queries** using `$__rate_interval` for rate calculations
+- **Color thresholds** on stat panels (green/yellow/red) for at-a-glance status
+
+**Testing status**: Dashboard JSON structure and metric references validated programmatically
+(`cargo run -p xtask -- validate`). Visual validation with live data should be performed locally
+following `DASHBOARD_VALIDATION.md`.
 
 - **Overview row**: At-a-glance stats with sparklines and thresholds (requests/s,
   error rate, p95 latency, servers up, active streams/sessions, cache hit ratio,
