@@ -6,11 +6,12 @@
 //! * backends: an `ArcSwap` of [`servers::BackendSet`] (`Arc<dyn backend::MediaBackend>`s
 //!   from a [`backend::BackendFactory`]);
 //! * ids: `Arc<dyn ids::IdMapper>`; users: `Arc<dyn users::ProxyAuthenticator>`;
-//! * TLS: `Arc<dyn tls::TlsProvider>`;
+//! * catalog: `Arc<dyn cache::CatalogCache>`; TLS: `Arc<dyn tls::TlsProvider>`;
 //! * HTTP: an [`endpoints::Registry`] and a [`rewrite::RewriteChain`].
 
 pub mod auth;
 pub mod backend;
+pub mod cache;
 pub mod config;
 pub mod dto;
 pub mod endpoints;
@@ -42,6 +43,7 @@ use std::time::Instant;
 
 use arc_swap::ArcSwap;
 use backend::{BackendFactory, JellyfinFactory, MediaBackend};
+use cache::CatalogCache;
 use config::{Config, PasswordCache};
 use ids::IdMapper;
 use metrics::gauge;
@@ -65,6 +67,9 @@ pub struct AppState {
     pub ids: Arc<dyn IdMapper>,
     pub sessions: Arc<auth::Sessions>,
     pub authenticator: Arc<dyn ProxyAuthenticator>,
+    pub catalog: Arc<dyn CatalogCache>,
+    /// Serialises catalog refreshes.
+    pub views_refresh: tokio::sync::Mutex<()>,
     pub rewriters: rewrite::RewriteChain,
     pub endpoints: endpoints::Registry,
     pub tls_provider: Arc<dyn TlsProvider>,
@@ -82,6 +87,7 @@ pub struct StateOptions {
     pub password_cache: Option<PasswordCache>,
     pub backend_factory: Option<Arc<dyn BackendFactory>>,
     pub tls_provider: Option<Arc<dyn TlsProvider>>,
+    pub catalog: Option<Arc<dyn CatalogCache>>,
     pub endpoints: Option<endpoints::Registry>,
     pub rewriters: Option<rewrite::RewriteChain>,
 }
@@ -131,6 +137,7 @@ impl AppState {
             users::TomlAuthenticator::from_config(&cfg),
         ));
         sessions.retain_users(&auth.ids());
+        let catalog = opts.catalog.unwrap_or_else(|| cache::build(&cfg.cache));
         let backends = Arc::new(ArcSwap::from_pointee(BackendSet::new(backends)));
 
         let st = Arc::new(AppState {
@@ -143,6 +150,8 @@ impl AppState {
             ids,
             sessions,
             authenticator: auth,
+            catalog,
+            views_refresh: tokio::sync::Mutex::new(()),
             rewriters: opts.rewriters.unwrap_or_default(),
             endpoints: opts
                 .endpoints
@@ -204,7 +213,8 @@ impl AppState {
         }
     }
 
-    /// Log into all backends in the background (failures are only logged).
+    /// Log into all backends in the background (failures are only logged),
+    /// and start the catalog refresher if `cache.refresh_interval_secs > 0`.
     pub fn spawn_initial_logins(self: &Shared) {
         for u in self.backends().iter() {
             let u = u.clone();
@@ -214,6 +224,23 @@ impl AppState {
                 }
             });
         }
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                let secs = match weak.upgrade() {
+                    Some(st) => st.cfg().cache.refresh_interval_secs,
+                    None => return,
+                };
+                tokio::time::sleep(std::time::Duration::from_secs(secs.max(5))).await;
+                if secs == 0 {
+                    continue;
+                }
+                let Some(st) = weak.upgrade() else { return };
+                if st.cfg().cache.enabled {
+                    proxy::refresh_catalog(&st).await;
+                }
+            }
+        });
     }
 }
 
