@@ -143,3 +143,31 @@ fn journal_mode_mismatch_reports_the_effective_mode() {
         JournalMode::Off
     );
 }
+
+#[test]
+fn open_creates_the_database_and_imports_legacy_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::write(
+        data.join("ids.tsv"),
+        "a\t0123456789abcdef0123456789abcdef\n",
+    )
+    .unwrap();
+    let s = open(&DatabaseConfig::default(), &data).unwrap();
+    assert_eq!(s.kind(), "sqlite");
+    assert_eq!(s.load_ids().unwrap().len(), 1);
+    assert!(data.join("jmp.db").exists());
+    assert!(data.join("ids.tsv.migrated").exists());
+    drop(s);
+
+    // A custom path in a directory that does not exist yet.
+    let cfg = DatabaseConfig {
+        path: Some(dir.path().join("elsewhere/state.db")),
+        journal_mode: JournalMode::Delete,
+        ..Default::default()
+    };
+    let s = open(&cfg, &data).unwrap();
+    assert!(s.load_ids().unwrap().is_empty());
+    assert!(dir.path().join("elsewhere/state.db").exists());
+}

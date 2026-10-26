@@ -3,7 +3,6 @@
 use axum::http::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use crate::store::{SessionStore, StoreError};
@@ -64,33 +63,10 @@ impl Session {
 
 pub struct Sessions {
     map: RwLock<HashMap<String, Session>>,
-    path: Option<PathBuf>,
-    store: Option<Arc<dyn SessionStore>>,
+    store: Arc<dyn SessionStore>,
 }
 
 impl Sessions {
-    pub fn new(path: Option<PathBuf>) -> Self {
-        let mut map = HashMap::new();
-        if let Some(p) = &path {
-            if let Ok(text) = std::fs::read_to_string(p) {
-                if let Ok(list) = serde_json::from_str::<Vec<Session>>(&text) {
-                    for s in list {
-                        map.insert(s.token.clone(), s);
-                    }
-                }
-            }
-        }
-        if path.is_some() {
-            metrics::counter!(crate::telemetry::names::PERSIST_OPS, "store" => "sessions", "op" => "load", "outcome" => "success").increment(1);
-        }
-        metrics::gauge!(crate::telemetry::names::SESSIONS_ACTIVE).set(map.len() as f64);
-        Sessions {
-            map: RwLock::new(map),
-            path,
-            store: None,
-        }
-    }
-
     /// Sessions loaded from `store`; every change is written through to it.
     pub fn with_store(store: Arc<dyn SessionStore>) -> Result<Self, StoreError> {
         let map: HashMap<_, _> = store
@@ -102,8 +78,7 @@ impl Sessions {
         metrics::gauge!(crate::telemetry::names::SESSIONS_ACTIVE).set(map.len() as f64);
         Ok(Sessions {
             map: RwLock::new(map),
-            path: None,
-            store: Some(store),
+            store,
         })
     }
 
@@ -127,29 +102,14 @@ impl Sessions {
     /// Write one change through to the store (if any) and count it.
     fn persist(&self, write: impl FnOnce(&dyn SessionStore) -> Result<(), StoreError>) {
         metrics::gauge!(crate::telemetry::names::SESSIONS_ACTIVE).set(self.len() as f64);
-        if let Some(store) = &self.store {
-            let outcome = match write(store.as_ref()) {
-                Ok(()) => "success",
-                Err(e) => {
-                    tracing::warn!("saving sessions failed: {e}");
-                    "error"
-                }
-            };
-            metrics::counter!(crate::telemetry::names::PERSIST_OPS, "store" => "sessions", "op" => "save", "outcome" => outcome).increment(1);
-        }
-        self.save();
-    }
-
-    fn save(&self) {
-        if let Some(p) = &self.path {
-            let list: Vec<Session> = self.map.read().unwrap().values().cloned().collect();
-            if let Ok(text) = serde_json::to_string_pretty(&list) {
-                let tmp = p.with_extension("tmp");
-                let ok = std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, p).is_ok();
-                let outcome = if ok { "success" } else { "error" };
-                metrics::counter!(crate::telemetry::names::PERSIST_OPS, "store" => "sessions", "op" => "save", "outcome" => outcome).increment(1);
+        let outcome = match write(self.store.as_ref()) {
+            Ok(()) => "success",
+            Err(e) => {
+                tracing::warn!("saving sessions failed: {e}");
+                "error"
             }
-        }
+        };
+        metrics::counter!(crate::telemetry::names::PERSIST_OPS, "store" => "sessions", "op" => "save", "outcome" => outcome).increment(1);
     }
 
     pub fn insert(&self, s: Session) {

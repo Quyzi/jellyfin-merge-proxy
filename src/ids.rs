@@ -11,8 +11,6 @@
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::io::{BufRead, Write};
-use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 
@@ -172,66 +170,6 @@ impl HashedIdTable {
             .entry(server)
             .or_default()
             .fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Load the persisted table (if any) and start appending new entries to it.
-    pub fn with_persistence(mut self, dir: &Path) -> std::io::Result<Self> {
-        std::fs::create_dir_all(dir)?;
-        let path = dir.join("ids.tsv");
-        if let Ok(f) = std::fs::File::open(&path) {
-            let mut loaded = 0usize;
-            for line in std::io::BufReader::new(f).lines().map_while(Result::ok) {
-                let mut it = line.splitn(2, '\t');
-                if let (Some(name), Some(id)) = (it.next(), it.next()) {
-                    let Some(uid) = UpstreamItemId::parse(id) else {
-                        continue;
-                    };
-                    // Servers no longer configured are registered too, so
-                    // their old ids answer 410 Gone (or work again if re-added).
-                    let idx = self.servers.id_for(name);
-                    let pid = self.compute(idx, &uid);
-                    let prev = self.table.write().unwrap().insert(
-                        pid,
-                        Target::Item {
-                            upstream: idx,
-                            id: uid,
-                        },
-                    );
-                    if prev.is_none() {
-                        self.bump(idx);
-                    }
-                    loaded += 1;
-                }
-            }
-            tracing::info!("loaded {loaded} id mappings from {}", path.display());
-            counter!(names::PERSIST_OPS, "store" => "ids", "op" => "load", "outcome" => "success")
-                .increment(1);
-        }
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-        let (tx, rx) = mpsc::channel::<IdRow>();
-        let handle = std::thread::Builder::new()
-            .name("id-persist".into())
-            .spawn(move || {
-                let mut w = std::io::BufWriter::new(file);
-                while let Ok(r) = rx.recv() {
-                    let tsv = |r: IdRow| format!("{}\t{}\n", r.server, r.upstream_id);
-                    let mut ok = w.write_all(tsv(r).as_bytes()).is_ok();
-                    while let Ok(more) = rx.try_recv() {
-                        ok &= w.write_all(tsv(more).as_bytes()).is_ok();
-                    }
-                    ok &= w.flush().is_ok();
-                    let outcome = if ok { "success" } else { "error" };
-                    counter!(names::PERSIST_OPS, "store" => "ids", "op" => "save", "outcome" => outcome).increment(1);
-                }
-            })?;
-        self.writer = Some(Writer {
-            tx: std::sync::Mutex::new(tx),
-            handle: Some(handle),
-        });
-        Ok(self)
     }
 
     /// Load every mapping from `store` and write new ones through to it.
