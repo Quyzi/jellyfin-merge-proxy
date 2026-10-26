@@ -15,14 +15,15 @@ services:
       JMP_CONFIG: /config/config.toml
       # RUST_LOG: "info,jmp=debug"   # overrides [logging].filter
     volumes:
-      # ./config/config.toml is required (copy config.example.toml). Each upstream
-      # is a [[server]] block: name, server = "https://host:port", user, password
-      # (or api_key), optional [server.tls]. The proxy itself is [proxy].
-      # ./config/config.toml is required; ./config/data must be writable by uid 65532:
-      #   mkdir -p config/data && sudo chown -R 65532:65532 config/data
+      # ./config/config.toml: copy config.example.toml (the first start writes one
+      # into ./config if it is missing). Each upstream is a [[server]] block: name,
+      # server = "http://host:8096", user, password (or api_key). The proxy itself
+      # is [proxy]. ./config must be writable by the container user (65532 unless
+      # you set `user:`), e.g.  mkdir -p config && sudo chown -R 65532:65532 config
       - ./config:/config
-      # TLS material (listener cert/key, client CA, upstream CAs, mTLS client cert).
-      # Files are watched and hot-reloaded; point [tls]/[server.tls] paths here.
+      # OPTIONAL TLS material (listener cert/key, client CA, upstream CAs, mTLS
+      # client cert). Not needed for plain HTTP, the default. Files are watched
+      # and hot-reloaded; point [tls]/[server.tls] paths here.
       # - ./certs:/config/certs:ro
       # Or e.g. certificates managed by certbot / Caddy on the host:
       # - /etc/letsencrypt/live/media.example.com:/config/certs/le:ro
