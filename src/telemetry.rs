@@ -142,7 +142,7 @@ pub const METRICS: &[MetricDef] = &[
     m!(IDS_TABLE_SIZE, Gauge, "server", "Entries in the id mapping table."),
     m!(MERGE_ITEMS_IN, Counter, "endpoint", "Items received from upstreams for merged lists."),
     m!(MERGE_ITEMS_OUT, Counter, "endpoint", "Items returned to clients from merged lists (after dedupe and paging)."),
-    m!(DEDUPE_DROPPED, Counter, "key", "Duplicates removed, by match key: tmdb, imdb, tvdb, name."),
+    m!(DEDUPE_DROPPED, Counter, "key", "Duplicates removed, by match key: tmdb, imdb, tvdb, title (search hints: type+name+year), index (season/episode number of a show split across servers), name."),
     m!(DEDUPE_WINNER, Counter, "server", "Dedupe decisions won by each upstream."),
     m!(LIBRARY_GROUPS, Gauge, "kind", "Library views presented: merged (combined across servers) or single."),
     m!(CACHE_REQUESTS, Counter, "cache, outcome", "Catalog cache lookups: hit, miss, stale (refresh forced/expired)."),

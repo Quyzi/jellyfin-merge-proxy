@@ -1,0 +1,145 @@
+//! Copies of one series (and its seasons) that live on several servers.
+//!
+//! When dedupe folds a series found on two servers into one entry, the copy
+//! that is shown keeps its own proxy id, and the other copies are recorded
+//! here as its *siblings*. Season and episode lists for any member are then
+//! fanned out to every sibling and merged (seasons by number, episodes by
+//! season + episode number), so a show split across servers browses as one.
+//!
+//! Groups are persisted to `<data_dir>/siblings.tsv` (one `id\tid` pair per
+//! line) so that ids held by clients keep their merged view across restarts.
+
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::io::{BufRead, Write};
+use std::path::Path;
+use std::sync::{Arc, Mutex, RwLock};
+
+use crate::types::ProxyItemId;
+
+#[derive(Default)]
+pub struct SiblingTable {
+    groups: RwLock<HashMap<ProxyItemId, Arc<Vec<ProxyItemId>>>>,
+    /// Ids already looked up on the other servers (not persisted).
+    checked: Mutex<HashSet<ProxyItemId>>,
+    persist: Option<Mutex<std::fs::File>>,
+}
+
+impl SiblingTable {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Load `siblings.tsv` from `dir` and append new links to it.
+    pub fn with_persistence(mut self, dir: &Path) -> std::io::Result<Self> {
+        let path = dir.join("siblings.tsv");
+        if let Ok(f) = std::fs::File::open(&path) {
+            let mut n = 0usize;
+            for line in std::io::BufReader::new(f).lines().map_while(Result::ok) {
+                let mut it = line.split('\t');
+                if let (Some(a), Some(b)) = (
+                    it.next().and_then(ProxyItemId::parse),
+                    it.next().and_then(ProxyItemId::parse),
+                ) {
+                    self.union(&[a, b]);
+                    n += 1;
+                }
+            }
+            tracing::info!("loaded {n} sibling links from {}", path.display());
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        self.persist = Some(Mutex::new(file));
+        Ok(self)
+    }
+
+    /// Merge the groups of `ids` into one. Returns true if anything changed.
+    fn union(&self, ids: &[ProxyItemId]) -> bool {
+        let mut g = self.groups.write().unwrap();
+        let mut all: BTreeSet<ProxyItemId> = BTreeSet::new();
+        for id in ids {
+            match g.get(id) {
+                Some(members) => all.extend(members.iter().cloned()),
+                None => {
+                    all.insert(id.clone());
+                }
+            }
+        }
+        if all.len() < 2 {
+            return false;
+        }
+        let unchanged = ids
+            .iter()
+            .all(|id| g.get(id).is_some_and(|m| m.len() == all.len()));
+        if unchanged {
+            return false;
+        }
+        let members = Arc::new(all.into_iter().collect::<Vec<_>>());
+        for m in members.iter() {
+            g.insert(m.clone(), members.clone());
+        }
+        true
+    }
+
+    /// Record that `ids` are copies of the same thing on different servers.
+    pub fn link(&self, ids: &[ProxyItemId]) {
+        if !self.union(ids) {
+            return;
+        }
+        if let Some(f) = &self.persist {
+            let mut f = f.lock().unwrap();
+            for other in &ids[1..] {
+                let _ = writeln!(f, "{}\t{}", ids[0].as_str(), other.as_str());
+            }
+            let _ = f.flush();
+        }
+    }
+
+    /// Every member of `id`'s group, including `id`; None if it has no siblings.
+    pub fn group(&self, id: &ProxyItemId) -> Option<Arc<Vec<ProxyItemId>>> {
+        self.groups.read().unwrap().get(id).cloned()
+    }
+
+    /// Returns true the first time it is called for `id`.
+    pub fn first_check(&self, id: &ProxyItemId) -> bool {
+        self.checked.lock().unwrap().insert(id.clone())
+    }
+
+    pub fn len(&self) -> usize {
+        self.groups.read().unwrap().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(n: u8) -> ProxyItemId {
+        ProxyItemId::parse(&format!("{n:032x}")).unwrap()
+    }
+
+    #[test]
+    fn union_is_transitive_and_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = SiblingTable::new().with_persistence(dir.path()).unwrap();
+        assert!(t.group(&id(1)).is_none());
+        t.link(&[id(1), id(2)]);
+        t.link(&[id(3), id(2)]);
+        t.link(&[id(1), id(3)]);
+        let g = t.group(&id(3)).unwrap();
+        assert_eq!(g.as_slice(), &[id(1), id(2), id(3)]);
+        assert!(Arc::ptr_eq(&g, &t.group(&id(1)).unwrap()));
+        drop(t);
+        let lines = std::fs::read_to_string(dir.path().join("siblings.tsv")).unwrap();
+        assert_eq!(lines.lines().count(), 2, "no-op links are not written");
+        let t = SiblingTable::new().with_persistence(dir.path()).unwrap();
+        assert_eq!(t.group(&id(2)).unwrap().len(), 3);
+        assert!(t.first_check(&id(9)));
+        assert!(!t.first_check(&id(9)));
+    }
+}

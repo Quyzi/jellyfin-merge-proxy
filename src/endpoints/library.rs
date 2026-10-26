@@ -32,6 +32,12 @@ pub fn routes() -> Vec<Route> {
             .at("users/{u}/items/resume")
             .at("useritems/resume")
             .get(),
+        Route::auth("show-seasons", handler!(seasons))
+            .at("shows/{id}/seasons")
+            .get(),
+        Route::auth("show-episodes", handler!(episodes))
+            .at("shows/{id}/episodes")
+            .get(),
         Route::auth("nextup", handler!(nextup))
             .at("shows/nextup")
             .get(),
@@ -100,6 +106,20 @@ async fn resume(st: &Shared, r: Req, c: &Client) -> HandlerResult {
 
 async fn nextup(st: &Shared, r: Req, c: &Client) -> HandlerResult {
     done(proxy::fan_list(st, &r, c, &proxy::NEXTUP).await?)
+}
+
+async fn seasons(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    match proxy::show_children(st, &r, c, &proxy::SEASONS).await {
+        Some(res) => done(res?),
+        None => Ok(Flow::Next(r)),
+    }
+}
+
+async fn episodes(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    match proxy::show_children(st, &r, c, &proxy::EPISODES).await {
+        Some(res) => done(res?),
+        None => Ok(Flow::Next(r)),
+    }
 }
 
 async fn search(st: &Shared, r: Req, c: &Client) -> HandlerResult {

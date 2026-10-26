@@ -673,7 +673,8 @@ pub struct ListSpec {
     /// Canonical (modern) upstream path.
     pub path: Vec<String>,
     pub shape: Shape,
-    pub default_sort: Option<(&'static str, bool)>,
+    /// Sort when the client sends no SortBy (fan-out only).
+    pub default_sort: &'static [(&'static str, bool)],
     pub dedupe_items: bool,
     pub dedupe_by_name: bool,
 }
@@ -695,7 +696,7 @@ spec!(
     "items",
     ["Items"],
     Shape::QueryResult,
-    None,
+    &[],
     true,
     false
 );
@@ -704,7 +705,7 @@ spec!(
     "latest",
     ["Items", "Latest"],
     Shape::Array,
-    Some(("DateCreated", true)),
+    &[("DateCreated", true)],
     true,
     false
 );
@@ -713,7 +714,7 @@ spec!(
     "resume",
     ["UserItems", "Resume"],
     Shape::QueryResult,
-    Some(("DatePlayed", true)),
+    &[("DatePlayed", true)],
     false,
     false
 );
@@ -722,7 +723,7 @@ spec!(
     "nextup",
     ["Shows", "NextUp"],
     Shape::QueryResult,
-    None,
+    &[],
     false,
     false
 );
@@ -731,8 +732,26 @@ spec!(
     "search",
     ["Search", "Hints"],
     Shape::SearchHints,
-    None,
+    &[],
     true,
+    false
+);
+spec!(
+    SEASONS,
+    "seasons",
+    ["Shows", "{parent}", "Seasons"],
+    Shape::QueryResult,
+    &[("IndexNumber", false)],
+    false,
+    false
+);
+spec!(
+    EPISODES,
+    "episodes",
+    ["Shows", "{parent}", "Episodes"],
+    Shape::QueryResult,
+    &[("ParentIndexNumber", false), ("IndexNumber", false)],
+    false,
     false
 );
 #[allow(non_upper_case_globals)]
@@ -740,46 +759,89 @@ pub const NAMED: ListSpec = ListSpec {
     name: "named",
     path: Vec::new(),
     shape: Shape::QueryResult,
-    default_sort: Some(("SortName", false)),
+    default_sort: &[("SortName", false)],
     dedupe_items: false,
     dedupe_by_name: true,
 };
 
-/// Upstreams (and the upstream-side parent id) a list request goes to.
-async fn list_targets(
-    st: &Shared,
-    q: &[(String, String)],
-) -> Vec<(ServerId, Option<UpstreamItemId>)> {
+/// Targets of a list request: (upstream, upstream-side parent id).
+pub type ListTargets = Vec<(ServerId, Option<UpstreamItemId>)>;
+
+/// `(server, upstream id)` of `id` and of each of its siblings (copies of
+/// the same series/season on other servers), owner first, active servers
+/// only. A single entry if it has no siblings.
+pub fn with_siblings(st: &Shared, id: &str) -> ListTargets {
+    let Some(pid) = crate::types::ProxyItemId::parse(&normalize_hex_id(id).unwrap_or_default())
+    else {
+        return vec![];
+    };
+    let mut ids = vec![pid.clone()];
+    if let Some(g) = st.siblings.group(&pid) {
+        ids.extend(g.iter().filter(|m| **m != pid).cloned());
+    }
+    let mut out: ListTargets = vec![];
+    for m in ids {
+        if let Some(Target::Item { upstream, id }) = st.ids.decode(&m) {
+            let active = st.backend(upstream).is_some_and(|b| !b.is_down());
+            if active && !out.iter().any(|(u, _)| *u == upstream) {
+                out.push((upstream, Some(id)));
+            }
+        }
+    }
+    out
+}
+
+/// Upstreams (and the upstream-side parent id) a list request goes to, and
+/// whether they are copies of one series/season (so children merge by number).
+async fn list_targets(st: &Shared, q: &[(String, String)]) -> (ListTargets, bool) {
     let _s = Stage::start("id_decode");
     let parent = q_get(q, "ParentId")
         .filter(|p| normalize_hex_id(p).as_deref() != Some(st.root_id.as_str()));
     if let Some(p) = parent {
         return match resolve_or_refresh(st, p).await {
-            Some(Target::View(v)) => v
-                .members
-                .iter()
-                .map(|(u, id)| (*u, Some(id.clone())))
-                .collect(),
-            Some(Target::Item { upstream, id }) => vec![(upstream, Some(id))],
+            Some(Target::View(v)) => (
+                v.members
+                    .iter()
+                    .map(|(u, id)| (*u, Some(id.clone())))
+                    .collect(),
+                false,
+            ),
+            Some(Target::Item { upstream, id }) => {
+                let t = with_siblings(st, p);
+                if t.len() > 1 {
+                    (t, true)
+                } else {
+                    (vec![(upstream, Some(id))], false)
+                }
+            }
             None => {
                 tracing::debug!("unknown ParentId {p}");
-                vec![]
+                (vec![], false)
             }
         };
     }
-    // Series / season scoped queries go to the owner only.
+    // Series / season scoped queries go to the owner (and its siblings).
     for key in ["SeriesId", "SeasonId", "AlbumId"] {
         if let Some(v) = q_get(q, key) {
             if let Some(Target::Item { upstream, .. }) = resolve_or_refresh(st, v).await {
-                return vec![(upstream, None)];
+                let t: ListTargets = with_siblings(st, v)
+                    .into_iter()
+                    .map(|(u, _)| (u, None))
+                    .collect();
+                if t.len() > 1 {
+                    return (t, true);
+                }
+                return (vec![(upstream, None)], false);
             }
         }
     }
-    st.backends()
+    let all = st
+        .backends()
         .iter()
         .filter(|u| !u.is_down())
         .map(|u| (u.id(), None))
-        .collect()
+        .collect();
+    (all, false)
 }
 
 /// Translate the client query for one upstream. Returns None if the query
@@ -815,6 +877,11 @@ fn query_for(
                     had_ids = true;
                     if upstream == u {
                         kept.push(id.into_string());
+                    } else if let Some((_, Some(sid))) =
+                        with_siblings(st, part).into_iter().find(|(x, _)| *x == u)
+                    {
+                        // The same series/season on this server.
+                        kept.push(sid.into_string());
                     }
                 }
                 Some(Target::View(view)) => {
@@ -840,6 +907,156 @@ fn query_for(
         out.push(("Limit".into(), want.to_string()));
     }
     Some(out)
+}
+
+/// GET `path?query` on one upstream as the proxy's upstream user.
+async fn upstream_json(
+    up: &Arc<dyn MediaBackend>,
+    path: &[&str],
+    query: &[(&str, &str)],
+) -> Option<Value> {
+    up.ensure_login().await.ok()?;
+    let uc = up.session().await;
+    let mut q: Vec<(String, String)> = query
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let segs = crate::paths::adapt(
+        path.iter().map(|s| s.to_string()).collect(),
+        &mut q,
+        uc.modern,
+        uc.user_id.as_deref(),
+    );
+    match up.get_json(&path_with_query(&segs, &q)).await {
+        Ok((s, v)) if s.is_success() => Some(v),
+        _ => None,
+    }
+}
+
+/// Find copies of series `id` on the other servers (same TMDB/IMDb/TVDB id)
+/// and record them as siblings. Runs once per id per process; only when
+/// series dedupe is on. Lists that dedupe series link them too, this covers
+/// a series opened before any merged list showed it (e.g. from Latest).
+pub async fn discover_siblings(st: &Shared, id: &str) {
+    let cfg = st.cfg();
+    if !cfg.merge.dedupe
+        || !cfg
+            .merge
+            .dedupe_types
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case("Series"))
+    {
+        return;
+    }
+    let Some(pid) = normalize_hex_id(id).and_then(|n| crate::types::ProxyItemId::parse(&n)) else {
+        return;
+    };
+    if st.siblings.group(&pid).is_some() || !st.siblings.first_check(&pid) {
+        return;
+    }
+    let Some(Target::Item { upstream, id: uid }) = st.ids.decode(&pid) else {
+        return;
+    };
+    let set = st.backends();
+    let Some(owner) = set.iter().find(|b| b.id() == upstream).cloned() else {
+        return;
+    };
+    let Some(item) = upstream_json(
+        &owner,
+        &["Items", uid.as_str()],
+        &[("Fields", "ProviderIds")],
+    )
+    .await
+    else {
+        return;
+    };
+    if item.get("Type").and_then(|t| t.as_str()) != Some("Series") {
+        return;
+    }
+    let keys = merge::provider_keys(&item);
+    if keys.is_empty() {
+        return;
+    }
+    let year = item
+        .get("ProductionYear")
+        .and_then(|y| y.as_i64())
+        .map(|y| y.to_string());
+    let name = item.get("Name").and_then(|n| n.as_str()).unwrap_or("");
+    let mut q = vec![
+        ("Recursive", "true"),
+        ("IncludeItemTypes", "Series"),
+        ("Fields", "ProviderIds"),
+        ("Limit", "500"),
+    ];
+    match &year {
+        Some(y) => q.push(("Years", y.as_str())),
+        None => q.push(("SearchTerm", name)),
+    }
+    let mut found = vec![pid.clone()];
+    for other in set.iter().filter(|b| b.id() != upstream && !b.is_down()) {
+        let Some(v) = upstream_json(other, &["Items"], &q).await else {
+            continue;
+        };
+        for it in v
+            .get("Items")
+            .and_then(|i| i.as_array())
+            .into_iter()
+            .flatten()
+        {
+            let theirs = merge::provider_keys(it);
+            if theirs.iter().any(|k| keys.contains(k)) {
+                if let Some(raw) = it
+                    .get("Id")
+                    .and_then(|i| i.as_str())
+                    .and_then(UpstreamItemId::parse)
+                {
+                    found.push(st.ids.encode(other.id(), &raw).id);
+                }
+                break;
+            }
+        }
+    }
+    if found.len() > 1 {
+        tracing::debug!(siblings = found.len() - 1, "series found on other servers");
+        st.siblings.link(&found);
+    }
+}
+
+/// Seasons / episodes of a series that has copies on several servers:
+/// fanned out to every copy and merged by number. `None` if the series has
+/// no siblings (the request is forwarded to its owner as usual).
+pub async fn show_children(
+    st: &Shared,
+    r: &Req,
+    c: &Client,
+    spec: &ListSpec,
+) -> Option<Result<Response>> {
+    let id = r.segs.get(1)?;
+    discover_siblings(st, id).await;
+    let targets = with_siblings(st, id);
+    if targets.len() < 2 {
+        return None;
+    }
+    Some(fan_list_on(st, r, c, spec, targets, true).await)
+}
+
+/// Remember which dropped duplicates of `types` are copies of the kept item.
+fn link_siblings(st: &Shared, stats: &merge::DedupeStats, types: &[&str]) {
+    for d in &stats.drops {
+        let ty = d.item_type.as_deref().unwrap_or("");
+        if !types.iter().any(|t| t.eq_ignore_ascii_case(ty)) {
+            continue;
+        }
+        let ids: Vec<_> = [&d.winner_id, &d.loser_id]
+            .into_iter()
+            .filter_map(|i| i.as_deref())
+            .filter_map(normalize_hex_id)
+            .filter_map(|i| crate::types::ProxyItemId::parse(&i))
+            .collect();
+        if ids.len() == 2 {
+            st.siblings.link(&ids);
+        }
+    }
 }
 
 /// Make sure the upstream `Fields` list contains `field` (case-insensitive),
@@ -869,8 +1086,22 @@ fn fan_outcome(e: &BackendError) -> &'static str {
 
 #[tracing::instrument(level = "debug", skip_all, fields(endpoint = spec.name))]
 pub async fn fan_list(st: &Shared, r: &Req, c: &Client, spec: &ListSpec) -> Result<Response> {
+    let (targets, siblings) = list_targets(st, &r.query).await;
+    fan_list_on(st, r, c, spec, targets, siblings).await
+}
+
+/// [`fan_list`] over explicit targets. A `{parent}` segment in `spec.path`
+/// is replaced by each target's parent id. `siblings`: the targets are copies
+/// of one series/season, so seasons and episodes are merged by number.
+pub async fn fan_list_on(
+    st: &Shared,
+    r: &Req,
+    c: &Client,
+    spec: &ListSpec,
+    targets: ListTargets,
+    siblings: bool,
+) -> Result<Response> {
     let cfg = st.cfg();
-    let targets = list_targets(st, &r.query).await;
     let start: usize = q_get(&r.query, "StartIndex")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
@@ -900,7 +1131,14 @@ pub async fn fan_list(st: &Shared, r: &Req, c: &Client, spec: &ListSpec) -> Resu
             ensure_field(&mut q, "ProviderIds");
         }
         queried += 1;
-        let path = spec.path.clone();
+        let path: Vec<String> = spec
+            .path
+            .iter()
+            .map(|s| match (s.as_str(), &parent) {
+                ("{parent}", Some(p)) => p.to_string(),
+                _ => s.clone(),
+            })
+            .collect();
         futs.push(async move {
             let outcome = |o: &'static str| {
                 counter!(names::FANOUT_RESULTS, "endpoint" => endpoint, "server" => up.name().to_string(), "outcome" => o).increment(1);
@@ -993,6 +1231,15 @@ pub async fn fan_list(st: &Shared, r: &Req, c: &Client, spec: &ListSpec) -> Resu
         let (a, stats) = d.dedupe(all);
         all = a;
         removed += stats.removed;
+        link_siblings(st, &stats, &["Series"]);
+    }
+    if fanout && siblings && cfg.merge.dedupe {
+        let _s = Stage::start("dedupe");
+        let d = MeteredDeduplicator::new(merge::ChildIndexDeduplicator, &server_names);
+        let (a, stats) = d.dedupe(all);
+        all = a;
+        removed += stats.removed;
+        link_siblings(st, &stats, &["Season"]);
     }
     if fanout && spec.dedupe_by_name {
         let _s = Stage::start("dedupe");
@@ -1006,9 +1253,11 @@ pub async fn fan_list(st: &Shared, r: &Req, c: &Client, spec: &ListSpec) -> Resu
         let _s = Stage::start("sort_page");
         let mut sort = merge::parse_sort(q_get(&r.query, "SortBy"), q_get(&r.query, "SortOrder"));
         if sort.is_empty() {
-            if let Some((f, d)) = spec.default_sort {
-                sort = vec![(f.to_string(), d)];
-            }
+            sort = spec
+                .default_sort
+                .iter()
+                .map(|(f, d)| (f.to_string(), *d))
+                .collect();
         }
         merge::sort_items(&mut items, &sort);
         let s = if spec.shape == Shape::Array { 0 } else { start };
@@ -1026,7 +1275,7 @@ pub async fn fan_list(st: &Shared, r: &Req, c: &Client, spec: &ListSpec) -> Resu
 /// Fan out a request returning an object and merge the objects:
 /// arrays are unioned, numbers summed (`sum`) or the first value kept.
 pub async fn fan_merge_objects(st: &Shared, r: &Req, c: &Client, sum: bool) -> Result<Response> {
-    let targets = list_targets(st, &r.query).await;
+    let (targets, _) = list_targets(st, &r.query).await;
     let segs: Vec<String> = r.segs.clone();
     let futs = targets.into_iter().filter_map(|(u, parent)| {
         let q = query_for(st, &r.query, u, parent.as_ref().map(|p| p.as_str()), None)?;
