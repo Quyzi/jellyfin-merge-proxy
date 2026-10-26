@@ -2,6 +2,9 @@ apiVersion: 1
 
 datasources:
   - name: Prometheus
+    # Fixed uid so links/alerts can reference it; the dashboard itself uses a
+    # ${datasource} variable and works with any Prometheus datasource.
+    uid: prometheus
     type: prometheus
     access: proxy
     url: http://prometheus:9090
@@ -10,5 +13,5 @@ datasources:
     jsonData:
       httpMethod: POST
       prometheusType: Prometheus
-      prometheusVersion: 2.40.0
+      # Must match prometheus.yml scrape_interval so $__rate_interval is right.
       timeInterval: 15s
