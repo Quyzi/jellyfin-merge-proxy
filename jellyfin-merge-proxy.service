@@ -23,6 +23,9 @@ ExecStart=/usr/bin/jellyfin-merge-proxy
 # Restart policy
 Restart=on-failure
 RestartSec=5s
+# Exit status 2 = configuration error (e.g. the packaged minimal /etc/jmp.toml
+# without [[user]]/[[server]]): fail once with the message instead of looping.
+RestartPreventExitStatus=2
 
 # Security hardening
 NoNewPrivileges=true
