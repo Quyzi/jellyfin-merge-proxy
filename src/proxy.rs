@@ -474,7 +474,14 @@ fn in_ctx<'a>(
 }
 
 fn path_with_query(segs: &[String], q: &[(String, String)]) -> String {
+    path_with_query_slash(segs, q, false)
+}
+
+fn path_with_query_slash(segs: &[String], q: &[(String, String)], slash: bool) -> String {
     let mut s = segs.join("/");
+    if slash && !s.is_empty() {
+        s.push('/');
+    }
     if !q.is_empty() {
         s.push('?');
         s.push_str(&rewrite::encode_pairs(q));
@@ -1471,6 +1478,7 @@ pub async fn forward(
     let uc = up.session().await;
     let user_ids = st.authenticator.ids();
     let ic = in_ctx(st, up.as_ref(), &uc, &user_ids);
+    let segs_override_none = segs_override.is_none();
     let segs: Vec<String> = segs_override
         .unwrap_or_else(|| r.segs.clone())
         .iter()
@@ -1488,6 +1496,7 @@ pub async fn forward(
         .filter(|(k, _)| !is_token_key(k))
         .map(|(k, v)| (k.clone(), ic.map_list(v)))
         .collect();
+    let trailing_slash = segs_override_none && r.raw_path.len() > 1 && r.raw_path.ends_with('/');
     let segs = crate::paths::adapt(segs, &mut q, uc.modern, uc.user_id.as_deref());
     let mut headers = HeaderMap::new();
     for h in FWD_REQ_HEADERS {
@@ -1511,7 +1520,9 @@ pub async fn forward(
             _ => Some(r.body.clone()),
         }
     };
-    let pq = path_with_query(&segs, &q);
+    // Keep a trailing slash: Jellyfin redirects `/web` to `/web/`, so
+    // dropping it made `/web/` redirect to itself forever.
+    let pq = path_with_query_slash(&segs, &q, trailing_slash);
     // Never log `pq` itself at info: it may carry ids; tokens were stripped above.
     tracing::debug!(upstream = %up.name(), method = %r.method, route = %telemetry::route_template(&segs.join("/")), "forwarding");
     if headers.contains_key(header::RANGE) {
@@ -1745,5 +1756,19 @@ mod tests {
         let mut d = q(&[("Fields", "")]);
         ensure_field(&mut d, "ProviderIds");
         assert_eq!(d, q(&[("Fields", "ProviderIds")]));
+    }
+
+    /// Regression (real Jellyfin 12.3): `/web/` must reach the upstream with
+    /// its trailing slash, or Jellyfin's `/web` -> `/web/` redirect loops.
+    #[test]
+    fn trailing_slash_is_kept() {
+        let segs = vec!["web".to_string()];
+        assert_eq!(path_with_query_slash(&segs, &[], true), "web/");
+        assert_eq!(path_with_query_slash(&segs, &[], false), "web");
+        assert_eq!(path_with_query_slash(&[], &[], true), "");
+        assert_eq!(
+            path_with_query_slash(&segs, &q(&[("a", "1")]), true),
+            "web/?a=1"
+        );
     }
 }
