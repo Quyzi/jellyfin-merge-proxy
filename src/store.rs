@@ -13,12 +13,17 @@ use crate::types::{ProxyItemId, UpstreamItemId};
 use std::path::PathBuf;
 
 mod memory;
+pub mod migrations;
 
 pub use memory::MemoryStore;
 
 /// Errors from a [`Store`].
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+    #[error("sqlite: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("database schema version {found} is newer than this build supports ({supported}); upgrade jellyfin-merge-proxy")]
+    SchemaTooNew { found: u32, supported: u32 },
     #[error("{path}: {source}")]
     Io {
         path: PathBuf,
