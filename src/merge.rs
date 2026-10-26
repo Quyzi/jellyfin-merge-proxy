@@ -165,6 +165,18 @@ pub fn page(items: Vec<Value>, start: usize, limit: Option<usize>) -> Vec<Value>
     }
 }
 
+/// `Type:title:<lowercased name>:<year>`, for items without provider ids.
+fn name_year_key(item: &Value) -> Option<String> {
+    let ty = item.get("Type").and_then(|t| t.as_str()).unwrap_or("");
+    let name = item
+        .get("Name")
+        .and_then(|t| t.as_str())?
+        .trim()
+        .to_lowercase();
+    let year = item.get("ProductionYear").and_then(|y| y.as_i64())?;
+    (!name.is_empty()).then(|| format!("{ty}:title:{name}:{year}"))
+}
+
 fn provider_keys(item: &Value) -> Vec<String> {
     let ty = item.get("Type").and_then(|t| t.as_str()).unwrap_or("");
     let mut keys = vec![];
@@ -225,7 +237,9 @@ impl Deduplicator for NoDedupe {
 }
 
 fn key_kind(k: &str) -> &'static str {
-    if k.contains(":tmdb:") {
+    if k.contains(":title:") {
+        "title"
+    } else if k.contains(":tmdb:") {
         "tmdb"
     } else if k.contains(":imdb:") {
         "imdb"
@@ -240,6 +254,19 @@ fn key_kind(k: &str) -> &'static str {
 #[derive(Debug, Clone)]
 pub struct ProviderIdDeduplicator {
     pub types: Vec<String>,
+    /// Also match items that have no `ProviderIds` at all by type, name and
+    /// production year (search hints never carry provider ids).
+    pub name_year_fallback: bool,
+}
+
+impl ProviderIdDeduplicator {
+    fn keys(&self, item: &Value) -> Vec<String> {
+        let mut keys = provider_keys(item);
+        if keys.is_empty() && self.name_year_fallback && item.get("ProviderIds").is_none() {
+            keys.extend(name_year_key(item));
+        }
+        keys
+    }
 }
 
 impl Deduplicator for ProviderIdDeduplicator {
@@ -260,7 +287,7 @@ impl Deduplicator for ProviderIdDeduplicator {
             if !applies(&r.item) {
                 continue;
             }
-            let keys = provider_keys(&r.item);
+            let keys = self.keys(&r.item);
             let existing = keys
                 .iter()
                 .find_map(|k| winner.get(k).map(|j| (*j, key_kind(k))));
@@ -272,10 +299,7 @@ impl Deduplicator for ProviderIdDeduplicator {
                             key: kind,
                             winner: r.server,
                         });
-                        for k in provider_keys(&items[j].item)
-                            .into_iter()
-                            .chain(keys.clone())
-                        {
+                        for k in self.keys(&items[j].item).into_iter().chain(keys.clone()) {
                             winner.insert(k, i);
                         }
                     } else {
@@ -562,6 +586,7 @@ mod tests {
         let d = MeteredDeduplicator::new(
             ProviderIdDeduplicator {
                 types: vec!["Movie".to_string()],
+                name_year_fallback: false,
             },
             &names,
         );
@@ -581,6 +606,59 @@ mod tests {
         assert_eq!(out.len(), 3);
         assert_eq!(stats.removed, 2);
         assert_eq!(out[0].item["S"], "a");
+    }
+
+    /// Regression (real Jellyfin 12.3 search hints): hints have no
+    /// ProviderIds, so they dedupe by type + name + year when enabled, and
+    /// items that have provider ids never fall back to the name.
+    #[test]
+    fn search_hints_dedupe_by_name_and_year() {
+        let r = |p: i64, s: usize, v: Value| Ranked {
+            priority: p,
+            server: ServerId(s),
+            item: v,
+        };
+        let items = vec![
+            r(
+                1,
+                1,
+                json!({"Name": "Big Buck Bunny", "Type": "Movie", "ProductionYear": 2008}),
+            ),
+            r(
+                0,
+                0,
+                json!({"Name": "big buck bunny", "Type": "Movie", "ProductionYear": 2008}),
+            ),
+            r(
+                2,
+                2,
+                json!({"Name": "Big Buck Bunny", "Type": "Movie", "ProductionYear": 2023}),
+            ),
+            r(
+                2,
+                2,
+                json!({"Name": "Sintel", "Type": "Movie", "ProductionYear": 2010, "ProviderIds": {}}),
+            ),
+            r(
+                0,
+                0,
+                json!({"Name": "Sintel", "Type": "Movie", "ProductionYear": 2010, "ProviderIds": {}}),
+            ),
+        ];
+        let d = ProviderIdDeduplicator {
+            types: vec!["Movie".into()],
+            name_year_fallback: true,
+        };
+        let (out, stats) = d.dedupe(items.clone());
+        assert_eq!(stats.removed, 1);
+        assert_eq!(stats.drops[0].key, "title");
+        assert_eq!(stats.drops[0].winner, ServerId(0));
+        assert_eq!(out.len(), 4);
+        let off = ProviderIdDeduplicator {
+            types: vec!["Movie".into()],
+            name_year_fallback: false,
+        };
+        assert_eq!(off.dedupe(items).1.removed, 0);
     }
 
     #[test]
