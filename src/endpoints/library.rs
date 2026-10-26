@@ -4,7 +4,11 @@ use super::{done, Flow, HandlerResult, Route};
 use crate::dto;
 use crate::handler;
 use crate::ids::Target;
-use crate::proxy::{self, ok_json, q_get, Client, ListSpec, Req};
+use crate::proxy::catalog;
+use crate::proxy::forward;
+use crate::proxy::list::{self, ListSpec};
+use crate::proxy::response::{ok_json, q_get};
+use crate::proxy::{Client, Req};
 use crate::Shared;
 
 pub fn routes() -> Vec<Route> {
@@ -78,7 +82,7 @@ async fn view_image(st: &Shared, r: Req, c: &Client) -> HandlerResult {
         let (u, mid) = v.members[0].clone();
         let mut segs = vec!["Items".to_string(), mid.into_string()];
         segs.extend(r.segs[2..].iter().cloned());
-        return done(proxy::forward(st, u, r, c, Some(segs)).await?);
+        return done(forward::forward(st, u, r, c, Some(segs)).await?);
     }
     Ok(Flow::Next(r))
 }
@@ -89,55 +93,55 @@ async fn items(st: &Shared, r: Req, c: &Client) -> HandlerResult {
         .as_deref()
         == Some(st.root_id.as_str())
     {
-        let v = proxy::views(st, c, false).await;
+        let v = catalog::views(st, c, false).await;
         let n = v.len();
         return done(ok_json(dto::query_result(v, n, 0)));
     }
-    done(proxy::fan_list(st, &r, c, &proxy::ITEMS).await?)
+    done(list::fan_list(st, &r, c, &list::ITEMS).await?)
 }
 
 async fn latest(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    done(proxy::fan_list(st, &r, c, &proxy::LATEST).await?)
+    done(list::fan_list(st, &r, c, &list::LATEST).await?)
 }
 
 async fn resume(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    done(proxy::fan_list(st, &r, c, &proxy::RESUME).await?)
+    done(list::fan_list(st, &r, c, &list::RESUME).await?)
 }
 
 async fn nextup(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    done(proxy::fan_list(st, &r, c, &proxy::NEXTUP).await?)
+    done(list::fan_list(st, &r, c, &list::NEXTUP).await?)
 }
 
 async fn seasons(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    match proxy::show_children(st, &r, c, &proxy::SEASONS).await {
+    match list::show_children(st, &r, c, &list::SEASONS).await {
         Some(res) => done(res?),
         None => Ok(Flow::Next(r)),
     }
 }
 
 async fn episodes(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    match proxy::show_children(st, &r, c, &proxy::EPISODES).await {
+    match list::show_children(st, &r, c, &list::EPISODES).await {
         Some(res) => done(res?),
         None => Ok(Flow::Next(r)),
     }
 }
 
 async fn search(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    done(proxy::fan_list(st, &r, c, &proxy::SEARCH).await?)
+    done(list::fan_list(st, &r, c, &list::SEARCH).await?)
 }
 
 async fn named(st: &Shared, r: Req, c: &Client) -> HandlerResult {
     let spec = ListSpec {
         path: r.segs.clone(),
-        ..proxy::NAMED
+        ..list::NAMED
     };
-    done(proxy::fan_list(st, &r, c, &spec).await?)
+    done(list::fan_list(st, &r, c, &spec).await?)
 }
 
 async fn filters(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    done(proxy::fan_merge_objects(st, &r, c, false).await?)
+    done(list::fan_merge_objects(st, &r, c, false).await?)
 }
 
 async fn counts(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    done(proxy::fan_merge_objects(st, &r, c, true).await?)
+    done(list::fan_merge_objects(st, &r, c, true).await?)
 }

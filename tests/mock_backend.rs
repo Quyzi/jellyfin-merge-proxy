@@ -4,7 +4,8 @@
 
 use jmp::backend::mock::MockFactory;
 use jmp::endpoints::{done, Registry, Route};
-use jmp::proxy::{ok_json, Client, Req};
+use jmp::proxy::response::ok_json;
+use jmp::proxy::{Client, Req};
 use jmp::{AppState, Shared, StateOptions};
 use serde_json::{json, Value};
 use std::net::SocketAddr;

@@ -23,7 +23,10 @@ pub mod sessions;
 pub mod system;
 pub mod users;
 
-use crate::proxy::{self, Client, Req};
+use crate::proxy::auth;
+use crate::proxy::forward;
+use crate::proxy::response::err_resp;
+use crate::proxy::{Client, Req};
 use crate::Shared;
 use axum::http::Method;
 use axum::response::Response;
@@ -244,22 +247,22 @@ impl Registry {
     /// and run the first route that handles the request.
     pub async fn dispatch(&self, st: &Shared, r: Req) -> anyhow::Result<Response> {
         let id_stage = crate::telemetry::Stage::start("id_decode");
-        let pat: Vec<String> = r.segs.iter().map(|s| proxy::classify(st, s)).collect();
+        let pat: Vec<String> = r.segs.iter().map(|s| forward::classify(st, s)).collect();
         drop(id_stage);
         let p: Vec<&str> = pat.iter().map(|s| s.as_str()).collect();
         let method = r.method.clone();
         let mut client: Option<Client> = None;
-        let anon = proxy::anon_client(st);
+        let anon = auth::anon_client(st);
         let mut r = r;
         for ep in self.route(&method, &p) {
             let c = match ep.access() {
                 Access::Public => &anon,
                 Access::Authenticated => {
                     if client.is_none() {
-                        match proxy::authenticate(st, &r, &p) {
+                        match auth::authenticate(st, &r, &p) {
                             Some(c) => client = Some(c),
                             None => {
-                                return Ok(proxy::err_resp(
+                                return Ok(err_resp(
                                     axum::http::StatusCode::UNAUTHORIZED,
                                     "Unauthorized",
                                 ))
@@ -274,10 +277,7 @@ impl Registry {
                 Flow::Next(back) => r = back,
             }
         }
-        Ok(proxy::err_resp(
-            axum::http::StatusCode::NOT_FOUND,
-            "Not found",
-        ))
+        Ok(err_resp(axum::http::StatusCode::NOT_FOUND, "Not found"))
     }
 }
 

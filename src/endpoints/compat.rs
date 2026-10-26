@@ -2,7 +2,9 @@
 
 use super::{done, HandlerResult, Route};
 use crate::handler;
-use crate::proxy::{self, ok_json, Client, Req};
+use crate::proxy::forward;
+use crate::proxy::response::ok_json;
+use crate::proxy::{Client, Req};
 use crate::Shared;
 use serde_json::json;
 
@@ -25,5 +27,5 @@ async fn empty_list(_st: &Shared, _r: Req, _c: &Client) -> HandlerResult {
 }
 
 async fn primary(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    done(proxy::primary_forward(st, r, c).await?)
+    done(forward::primary_forward(st, r, c).await?)
 }

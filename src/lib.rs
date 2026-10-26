@@ -295,7 +295,7 @@ impl AppState {
                 }
                 let Some(st) = weak.upgrade() else { return };
                 if st.cfg().cache.enabled {
-                    proxy::refresh_catalog(&st).await;
+                    proxy::catalog::refresh_catalog(&st).await;
                 }
             }
         });

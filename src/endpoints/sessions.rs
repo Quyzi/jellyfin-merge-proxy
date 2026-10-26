@@ -3,7 +3,10 @@
 use super::{done, HandlerResult, Route};
 use crate::dto;
 use crate::handler;
-use crate::proxy::{self, no_content, ok_json, Client, Req};
+use crate::proxy::auth;
+use crate::proxy::forward;
+use crate::proxy::response::{no_content, ok_json};
+use crate::proxy::{Client, Req};
 use crate::Shared;
 use serde_json::{json, Value};
 
@@ -42,9 +45,9 @@ async fn logout(st: &Shared, _r: Req, c: &Client) -> HandlerResult {
 }
 
 async fn playstate(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    done(proxy::playstate(st, r, c).await?)
+    done(forward::playstate(st, r, c).await?)
 }
 
 async fn display_prefs(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    done(proxy::display_prefs(st, &r, c))
+    done(auth::display_prefs(st, &r, c))
 }

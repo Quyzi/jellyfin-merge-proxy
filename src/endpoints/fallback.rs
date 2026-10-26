@@ -1,8 +1,7 @@
-//! Everything else: forward to the backend owning the ids in the request.
-
 use super::{done, HandlerResult, Route};
 use crate::handler;
-use crate::proxy::{self, Client, Req};
+use crate::proxy::forward as fwd;
+use crate::proxy::{Client, Req};
 use crate::Shared;
 
 pub fn routes() -> Vec<Route> {
@@ -10,5 +9,5 @@ pub fn routes() -> Vec<Route> {
 }
 
 async fn forward(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    done(proxy::generic(st, r, c).await?)
+    done(fwd::generic(st, r, c).await?)
 }

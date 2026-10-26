@@ -3,7 +3,10 @@
 use super::{done, HandlerResult, Route};
 use crate::dto;
 use crate::handler;
-use crate::proxy::{self, ok_json, Client, Req};
+use crate::proxy::auth;
+use crate::proxy::forward;
+use crate::proxy::response::{host_address, ok_json};
+use crate::proxy::{Client, Req};
 use crate::Shared;
 use axum::http::header;
 use axum::response::{IntoResponse, Redirect};
@@ -42,7 +45,7 @@ async fn info_public(st: &Shared, r: Req, _c: &Client) -> HandlerResult {
         &cfg.proxy.name,
         &st.server_id,
         &cfg.proxy.reported_version,
-        &proxy::host_address(&r.headers),
+        &host_address(&r.headers),
     )))
 }
 
@@ -52,7 +55,7 @@ async fn info(st: &Shared, r: Req, _c: &Client) -> HandlerResult {
         &cfg.proxy.name,
         &st.server_id,
         &cfg.proxy.reported_version,
-        &proxy::host_address(&r.headers),
+        &host_address(&r.headers),
     )))
 }
 
@@ -77,11 +80,11 @@ async fn users_public(_st: &Shared, _r: Req, _c: &Client) -> HandlerResult {
 }
 
 async fn login(st: &Shared, r: Req, _c: &Client) -> HandlerResult {
-    done(proxy::login(st, &r).await)
+    done(auth::login(st, &r).await)
 }
 
 async fn web(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    done(proxy::primary_forward(st, r, c).await?)
+    done(forward::primary_forward(st, r, c).await?)
 }
 
 async fn endpoint(_st: &Shared, _r: Req, _c: &Client) -> HandlerResult {
