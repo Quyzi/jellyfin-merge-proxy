@@ -14,8 +14,10 @@ use std::path::PathBuf;
 
 mod memory;
 pub mod migrations;
+mod sqlite;
 
 pub use memory::MemoryStore;
+pub use sqlite::{apply_journal_mode, publish_journal_mode, SqliteStore};
 
 /// Errors from a [`Store`].
 #[derive(Debug, thiserror::Error)]

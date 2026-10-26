@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::{DatabaseConfig, JournalMode};
 
 pub(crate) fn pid(n: u8) -> ProxyItemId {
     ProxyItemId::parse(&format!("{n:032x}")).unwrap()
@@ -70,4 +71,75 @@ pub(crate) fn conformance(s: &dyn Store) {
 #[test]
 fn memory_store_conformance() {
     conformance(&MemoryStore::new());
+}
+
+#[test]
+fn sqlite_store_conformance() {
+    let s = SqliteStore::open_in_memory(&DatabaseConfig::default()).unwrap();
+    conformance(&s);
+    let dir = tempfile::tempdir().unwrap();
+    let s = SqliteStore::open(&dir.path().join("jmp.db"), &DatabaseConfig::default()).unwrap();
+    conformance(&s);
+}
+
+#[test]
+fn sqlite_store_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jmp.db");
+    let cfg = DatabaseConfig::default();
+    {
+        let s = SqliteStore::open(&path, &cfg).unwrap();
+        s.append_ids(&[row(7, "Movies")]).unwrap();
+        s.append_links(&[(pid(7), pid(8))]).unwrap();
+        s.put_session(&session("tok", "u")).unwrap();
+    }
+    let s = SqliteStore::open(&path, &cfg).unwrap();
+    assert_eq!(s.load_ids().unwrap(), vec![row(7, "Movies")]);
+    assert_eq!(s.load_links().unwrap(), vec![(pid(7), pid(8))]);
+    assert_eq!(s.load_sessions().unwrap(), vec![session("tok", "u")]);
+    assert_eq!(s.schema_version(), migrations::latest());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+}
+
+#[test]
+fn journal_mode_is_read_back() {
+    let dir = tempfile::tempdir().unwrap();
+    for mode in [JournalMode::Wal, JournalMode::Delete, JournalMode::Truncate] {
+        let cfg = DatabaseConfig {
+            journal_mode: mode,
+            ..Default::default()
+        };
+        let path = dir.path().join(format!("{mode}.db"));
+        let s = SqliteStore::open(&path, &cfg).unwrap();
+        assert_eq!(s.journal_mode(), mode);
+        let c = rusqlite::Connection::open(&path).unwrap();
+        let on_disk: String = c
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        // WAL is a property of the file; the rollback modes are per connection.
+        if mode == JournalMode::Wal {
+            assert_eq!(on_disk, "wal");
+        }
+    }
+}
+
+#[test]
+fn journal_mode_mismatch_reports_the_effective_mode() {
+    // An in-memory database cannot use WAL: SQLite keeps "memory".
+    let s = SqliteStore::open_in_memory(&DatabaseConfig::default()).unwrap();
+    assert_eq!(s.journal_mode(), JournalMode::Memory);
+    let c = rusqlite::Connection::open_in_memory().unwrap();
+    assert_eq!(
+        apply_journal_mode(&c, JournalMode::Delete).unwrap(),
+        JournalMode::Memory
+    );
+    assert_eq!(
+        apply_journal_mode(&c, JournalMode::Off).unwrap(),
+        JournalMode::Off
+    );
 }
