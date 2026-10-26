@@ -83,28 +83,30 @@ rustls (no OpenSSL), tracing, metrics + Prometheus exporter.
 ## Quick start (Docker)
 
 ```sh
-mkdir -p config
-cp config.example.toml config/config.toml
-$EDITOR config/config.toml           # set [[user]] and [[server]] entries
-sudo chown -R 65532:65532 config     # the image runs as uid 65532 (nonroot) by default
+mkdir -p data
+cp config.example.toml jmp.toml
+$EDITOR jmp.toml                     # set [[user]] and [[server]] entries
+sudo chown -R 65532:65532 data       # the image runs as uid 65532 (nonroot) by default
 docker compose up -d --build
 docker compose logs -f
 ```
 
-The image runs as any uid (`--user 99:100`, compose `user:`) and only writes
-under `/config` (`/config/data` for the id map and sessions). If
-`/config/config.toml` is missing it writes `/config/config.example.toml`
-(when `/config` is writable), prints what to do and exits with code 2.
-No certificates are needed: plain HTTP is the default, and TLS inbound
-(`[tls]`) or to upstreams (`[server.tls]`) is opt-in.
+The image runs as any uid (`--user 99:100`, compose `user:`) and writes to
+`/var/lib/jmp` for data (id map, sessions, catalog cache, auto-generated secret
+key). Config is at `/etc/jmp.toml` (bind-mounted). If it's missing, the container
+writes `jmp.example.toml` next to it (when the directory is writable), prints what
+to do and exits with code 2. No certificates are needed: plain HTTP is the default,
+and TLS inbound (`[tls]`) or to upstreams (`[server.tls]`) is opt-in.
 
 The image is a multi-stage build on Chainguard images
 (`cgr.dev/chainguard/rust` → `cgr.dev/chainguard/glibc-dynamic`): no shell,
-non-root, rustls/aws-lc-rs for TLS. `JMP_CONFIG=/config/config.toml`, port
-`8096`. `docker-compose.yml` contains commented mounts for certificates
+non-root, rustls/aws-lc-rs for TLS. `JMP_CONFIG=/etc/jmp.toml`, port
+`8096`. `docker-compose.yml` bind-mounts `./jmp.toml` to `/etc/jmp.toml` and
+a volume for `/var/lib/jmp` (data), with commented mounts for certificates
 (`./certs:/config/certs:ro`) and an optional Prometheus service
 (`deploy/prometheus.yml`). Pass `JMP_GIT_SHA=$(git rev-parse --short HEAD)`
-to stamp the build.
+to stamp the build. Auto-generated secret key (for upstream secret encryption) is
+`/var/lib/jmp/secret.key`; override via `JMP_SECRET_KEY` env (64 hex characters).
 
 There is no `HEALTHCHECK` in the image (no shell/curl in the runtime image);
 probe `GET /System/Ping` or `/metrics` from your orchestrator instead.
@@ -112,27 +114,31 @@ probe `GET /System/Ping` or `/metrics` from your orchestrator instead.
 ## Unraid
 
 [`unraid/jellyfin-merge-proxy.xml`](unraid/jellyfin-merge-proxy.xml) is a
-Community Applications template (bridge network, port 8096, `/config` on
-`/mnt/user/appdata/jellyfin-merge-proxy`, `--user 99:100`, an optional
-certificates path that is never required). The image name in it is a
-placeholder (`ghcr.io/OWNER/...`). Install steps, first-run config and TV
-setup: [`unraid/README.md`](unraid/README.md). The XML is checked with
-`xmllint --noout unraid/jellyfin-merge-proxy.xml`.
+Community Applications template (bridge network, port 8096, config file at
+`/mnt/user/appdata/jellyfin-merge-proxy/jmp.toml` bind-mounted to `/etc/jmp.toml`,
+data directory at `/mnt/user/appdata/jellyfin-merge-proxy/data` mounted to
+`/var/lib/jmp`, `--user 99:100`, an optional certificates path that is never
+required). The image name in it is a placeholder (`ghcr.io/OWNER/...`). Install
+steps, first-run config and TV setup: [`unraid/README.md`](unraid/README.md). The
+XML is checked with `xmllint --noout unraid/jellyfin-merge-proxy.xml`.
+**IMPORTANT**: Back up `/var/lib/jmp/secret.key`; losing it means re-entering all
+upstream passwords and API keys.
 
 ## Running without Docker
 
 ```sh
 cargo build --release
-./target/release/jellyfin-merge-proxy ./config.toml          # positional path
-./target/release/jellyfin-merge-proxy --config ./config.toml  # or -c
-JMP_CONFIG=./config.toml ./target/release/jellyfin-merge-proxy
-./target/release/jellyfin-merge-proxy                         # /config/config.toml
+./target/release/jellyfin-merge-proxy ./jmp.toml               # positional path
+./target/release/jellyfin-merge-proxy --config ./jmp.toml      # or -c
+JMP_CONFIG=./jmp.toml ./target/release/jellyfin-merge-proxy
+./target/release/jellyfin-merge-proxy                          # /etc/jmp.toml
 ```
 
 Other flags: `-h/--help`, `-V/--version` (version + git sha),
 `--metrics-md` (print the metric reference, used to generate `METRICS.md`).
 Signals: `SIGHUP` reloads the config, `SIGINT`/`SIGTERM` shut down gracefully
-(in-flight requests get up to 10 s).
+(in-flight requests get up to 10 s). Secret key: set `JMP_SECRET_KEY` env (64 hex)
+or let it auto-generate `/var/lib/jmp/secret.key` (default `data_dir`).
 
 ## Adding the server in a TV / client app
 
@@ -160,7 +166,7 @@ The proxy accepts the client token in every form Jellyfin clients use:
 ## Configuration
 
 Config path: first CLI argument (`-c/--config <path>` or a positional path),
-else `$JMP_CONFIG`, else `/config/config.toml`. The full, commented example is
+else `$JMP_CONFIG`, else `/etc/jmp.toml`. The full, commented example is
 [`config.example.toml`](config.example.toml). Upstreams are written like this:
 
 ```toml
@@ -175,7 +181,7 @@ Sections:
 
 | Section | Keys |
 |---|---|
-| `[proxy]` | `listen`, `name`, `id` (32 hex, optional), `reported_version`, `data_dir`, `unknown_routes` (`primary`\|`empty`), `upstream_timeout_secs`, `reload_interval_secs` (default 3), `drain_timeout_secs` (default 300) |
+| `[proxy]` | `listen`, `name`, `id` (32 hex, optional), `reported_version`, `data_dir` (default `/var/lib/jmp`), `unknown_routes` (`primary`\|`empty`), `upstream_timeout_secs`, `reload_interval_secs` (default 3), `drain_timeout_secs` (default 300), `rewrite_secrets` (default true) |
 | `[[user]]` | `name`, `password` (plaintext, `{ plain = ".." }`, `{ argon2 = ".." }` or a bare `$argon2id$...` string) |
 | `[[server]]` (alias `[[upstream]]`) | `name`, `server` (base URL, sub-path allowed), `user` + `password`, or `api_key` (+ `user` or `user_id`), `priority` (lower wins in dedupe; default = position), `enabled`, optional `[server.tls]` |
 | `[merge]` | `merge_libraries_by_name`, `dedupe`, `dedupe_types`, `label_colliding_libraries`, `fanout_limit` |
@@ -206,11 +212,25 @@ user, a warning is logged and user-scoped calls to that upstream will fail.
   the plaintext; the plaintext itself is not stored.
 * The plaintext buffers are zeroized after hashing, and the password type's
   `Debug` prints `<redacted>`.
-* **The TOML file is never rewritten.** If you don't want plaintext on disk,
-  put a hash in the file, e.g.
-  `echo -n 'secret' | argon2 "$(openssl rand -hex 8)" -id -e`.
-* Upstream passwords/API keys stay plaintext in the config (the proxy must
-  send them); they are held in a `Secret` type whose `Debug` redacts.
+* **When `rewrite_secrets = true` (default)**, plaintext passwords are replaced
+  in the config file with the argon2 hash after a successful load, so plaintext
+  never stays on disk. If you don't want this, set `rewrite_secrets = false`.
+  To pre-hash: `echo -n 'secret' | argon2 "$(openssl rand -hex 8)" -id -e`.
+
+## Upstream secret encryption
+
+* **When `rewrite_secrets = true` (default)**, upstream `password` and `api_key`
+  values that are plaintext are encrypted with **XChaCha20-Poly1305** (authenticated
+  encryption) and written back to the config file as `enc:v1:<base64>`.
+* The encryption key (256-bit) is loaded from:
+  1. `JMP_SECRET_KEY` env var (64 hex characters), or
+  2. `<data_dir>/secret.key` file (auto-generated if missing, 0600 permissions).
+* **BACK UP THE SECRET KEY**: losing it (or env var) means re-entering all upstream
+  passwords and API keys. The key file is logged on first generation.
+* Plaintext is still accepted (that's how users enter secrets); already-encrypted
+  values (`enc:v1:...`) are left untouched and decrypted on load.
+* Decryption failures (wrong key, corrupted data) are logged per-upstream and
+  counted in `jmp_secret_decrypt_failures_total`; that upstream is skipped.
 
 ## TLS
 

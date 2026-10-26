@@ -200,12 +200,13 @@ impl SecretCipher for XChaCha20Cipher {
     }
 
     fn decrypt(&self, encrypted: &str) -> Result<String, ConfigError> {
-        let encoded = encrypted
-            .strip_prefix(ENC_PREFIX)
-            .ok_or_else(|| ConfigError::Invalid("encrypted secret must start with enc:v1:".into()))?;
+        let encoded = encrypted.strip_prefix(ENC_PREFIX).ok_or_else(|| {
+            ConfigError::Invalid("encrypted secret must start with enc:v1:".into())
+        })?;
 
-        let combined = base64::decode(encoded)
-            .map_err(|e| ConfigError::Invalid(format!("invalid base64 in encrypted secret: {e}")))?;
+        let combined = base64::decode(encoded).map_err(|e| {
+            ConfigError::Invalid(format!("invalid base64 in encrypted secret: {e}"))
+        })?;
 
         if combined.len() < 24 {
             return Err(ConfigError::Invalid("encrypted secret too short".into()));
@@ -215,9 +216,9 @@ impl SecretCipher for XChaCha20Cipher {
         let nonce = chacha20poly1305::XNonce::from_slice(nonce_bytes);
 
         let cipher = XChaCha20Poly1305::new(self.key.as_bytes().into());
-        let mut plaintext = cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| ConfigError::Invalid("decryption failed: wrong key or corrupted data".into()))?;
+        let mut plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
+            ConfigError::Invalid("decryption failed: wrong key or corrupted data".into())
+        })?;
 
         let s = String::from_utf8(plaintext.clone()).map_err(|e| {
             plaintext.zeroize();
