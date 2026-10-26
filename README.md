@@ -603,6 +603,32 @@ cargo generate-rpm
 # (rpm -qlp requires rpm tools)
 ```
 
+### Dependabot Automation
+
+The repository includes Dependabot configuration (`.github/dependabot.yml`) for automated dependency updates:
+- **Cargo dependencies**: Weekly updates, grouped by minor/patch
+- **GitHub Actions**: Weekly updates, grouped
+- **Docker base images**: Weekly updates for Chainguard images
+
+Dependabot PRs are automatically merged for:
+- Patch and minor semver updates (after CI passes)
+- GitHub Actions updates
+- Docker digest updates
+
+Major version updates require manual review.
+
+**Required repository settings** (owner must enable):
+1. **Settings → General → Pull Requests**:
+   - ✅ Allow auto-merge
+2. **Settings → Branches** (for `master`):
+   - ✅ Require status checks to pass before merging
+   - ✅ Require branches to be up to date before merging
+   - Required checks: `fmt`, `clippy`, `test`, `audit`, `docker`
+3. **Settings → Code security and analysis**:
+   - ✅ Dependabot security updates
+
+Without these settings, Dependabot will still create PRs, but auto-merge won't work.
+
 Layout (details and the trait list in [ARCHITECTURE.md](ARCHITECTURE.md)):
 `src/config.rs` (TOML, secrets, validation), `src/types.rs` / `src/error.rs`
 (id newtypes, thiserror errors), `src/backend/` (`MediaBackend`, Jellyfin and
