@@ -557,11 +557,14 @@ pub fn first_run_help(path: &Path) -> Option<String> {
         Ok(true) => msg += &format!("Wrote an annotated example to {}.\n", example.display()),
         Ok(false) => msg += &format!("An annotated example is at {}.\n", example.display()),
         Err(e) => {
+            let (uid, gid) = (proc_status_id("Uid:"), proc_status_id("Gid:"));
             msg += &format!(
-                "Could not write an example to {} ({e}). The directory must be writable by this \
-                 container's user (uid {}); e.g. on the host: chown -R <uid>:<gid> <config dir>.\n",
+                "Could not write an example to {} ({e}). The config directory must be writable \
+                 by this process (uid {uid}, gid {gid}); on the host run e.g. \
+                 `chown -R {uid}:{gid} <the folder mounted at {}>`, or create the file from \
+                 config.example.toml in the project repository.\n",
                 example.display(),
-                current_uid()
+                dir.display()
             )
         }
     }
@@ -573,13 +576,13 @@ pub fn first_run_help(path: &Path) -> Option<String> {
     Some(msg)
 }
 
-fn current_uid() -> String {
-    // /proc/self/status: "Uid:\t<real>\t<effective>..."; no libc call needed.
+/// Effective uid/gid from /proc/self/status ("Uid:\t<real>\t<effective>...").
+fn proc_status_id(key: &str) -> String {
     std::fs::read_to_string("/proc/self/status")
         .ok()
         .and_then(|s| {
             s.lines()
-                .find_map(|l| l.strip_prefix("Uid:"))
+                .find_map(|l| l.strip_prefix(key))
                 .and_then(|l| l.split_whitespace().nth(1).map(str::to_string))
         })
         .unwrap_or_else(|| "?".into())
