@@ -6,6 +6,9 @@ use metrics::counter;
 use serde_json::Value;
 use std::time::Instant;
 
+use super::catalog::resolve_or_refresh;
+use super::response::{err_resp, is_token_key, no_content, ok_json};
+use super::{Client, Req};
 use crate::backend::{BackendRequest, BackendResponse, MediaBackend, SessionInfo};
 use crate::error::BackendError;
 use crate::ids::{looks_like_id, normalize_hex_id, Target};
@@ -14,10 +17,6 @@ use crate::servers::ServerState;
 use crate::telemetry::{self, names, Stage};
 use crate::types::ServerId;
 use crate::Shared;
-
-use super::catalog::resolve_or_refresh;
-use super::response::{err_resp, is_token_key, no_content, ok_json};
-use super::{Client, Req};
 
 pub fn out_ctx<'a>(
     st: &'a Shared,
