@@ -160,6 +160,3 @@ assets = [
 
 [package.metadata.generate-rpm.requires]
 systemd = "*"
-
-# SQLite persistence
-rusqlite = { version = "0.32", features = ["bundled"] }
