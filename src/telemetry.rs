@@ -58,6 +58,7 @@ pub mod names {
     pub const UPSTREAM_ERRORS: &str = "jmp_upstream_errors_total";
     pub const UPSTREAM_IN_FLIGHT: &str = "jmp_upstream_in_flight";
     pub const UPSTREAM_UP: &str = "jmp_upstream_up";
+    pub const UPSTREAM_CONFIGURED: &str = "jmp_upstream_configured";
     pub const UPSTREAM_RETRIES: &str = "jmp_upstream_retries_total";
     pub const UPSTREAM_REAUTH: &str = "jmp_upstream_reauth_total";
     pub const UPSTREAM_AUTH: &str = "jmp_upstream_auth_total";
@@ -158,6 +159,7 @@ pub const METRICS: &[MetricDef] = &[
     m!(UPSTREAM_ERRORS, Counter, "server, kind", "Upstream transport errors: connect, dns, tls, timeout, body, other."),
     m!(UPSTREAM_IN_FLIGHT, Gauge, "server", "Concurrent requests to each upstream (headers pending)."),
     m!(UPSTREAM_UP, Gauge, "server", "1 if the upstream is considered healthy, 0 while in back-off."),
+    m!(UPSTREAM_CONFIGURED, Gauge, "server", "1 if the upstream is currently configured, 0 if removed."),
     m!(UPSTREAM_RETRIES, Counter, "server, reason", "Upstream request retries (reason: unauthorized)."),
     m!(UPSTREAM_REAUTH, Counter, "server", "Re-authentications triggered by a 401."),
     m!(UPSTREAM_AUTH, Counter, "server, outcome", "Upstream logins: success, failure, unreachable."),

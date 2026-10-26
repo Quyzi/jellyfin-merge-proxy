@@ -239,6 +239,9 @@ impl Reloadable for BackendManager {
         let mut changed = false;
         let mut first_err = None;
         for (u, step) in plan {
+            // Set configured=1 for all servers in the new config
+            gauge!(names::UPSTREAM_CONFIGURED, "server" => u.name.as_str()).set(1.0);
+            
             match step {
                 Step::Keep(b) => {
                     match b.apply(cx).await {
@@ -300,7 +303,10 @@ impl Reloadable for BackendManager {
                 counter!(names::CONFIG_UPSTREAM_CHANGES, "change" => "removed").increment(1);
                 tracing::info!(upstream = %old.name(), "[[server]] removed");
                 self.catalog.invalidate_server(old.name());
-                gauge!(names::UPSTREAM_UP, "server" => old.name().to_string()).set(0.0);
+                // Mark as not configured so it disappears from dashboards/alerts
+                gauge!(names::UPSTREAM_CONFIGURED, "server" => old.name().to_string()).set(0.0);
+                // Don't touch UPSTREAM_UP - let it stay at its last value (0 or 1)
+                // until the series naturally expires from Prometheus
                 retired.push(old.clone());
             }
         }
