@@ -1,4 +1,32 @@
+# build output
 target/
 *.tar.gz
-config/config.toml
-config/data/
+
+# local config and proxy data (may contain passwords / tokens)
+config/
+*.local.toml
+sessions.json
+ids.tsv
+siblings.tsv
+catalog.json
+
+# secrets and certificates
+*.pem
+*.key
+*.pfx
+*.p12
+*.csr
+*.srl
+.env
+
+# real-Jellyfin test bed (scripts/real-jellyfin): media, server state, output
+/media/
+/jf/
+/jellyfin*/
+/s[0-9]/
+*.mkv
+*.mp4
+*.ts
+*.m3u8
+*.srt
+*.vtt
