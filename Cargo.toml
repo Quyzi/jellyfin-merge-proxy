@@ -64,11 +64,6 @@ x509-parser = "0.18"
 tempfile = "3"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 
-[build-dependencies]
-# For generating packages
-cargo-deb = { version = "2", optional = true }
-cargo-generate-rpm = { version = "0.15", optional = true }
-
 [profile.release]
 lto = "thin"
 codegen-units = 4
