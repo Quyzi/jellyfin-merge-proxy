@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 const USAGE: &str = "usage: jellyfin-merge-proxy [--config PATH] [--metrics-md] [--version]
 
-  -c, --config PATH   config file (default: $JMP_CONFIG or /config/config.toml)
+  -c, --config PATH   config file (default: $JMP_CONFIG or /etc/jmp.toml)
       --metrics-md    print the METRICS.md metric reference and exit
   -V, --version       print version
 
@@ -37,7 +37,7 @@ fn main() -> anyhow::Result<()> {
     }
     let path = path
         .or_else(|| std::env::var_os("JMP_CONFIG").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("/config/config.toml"));
+        .unwrap_or_else(|| PathBuf::from("/etc/jmp.toml"));
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()

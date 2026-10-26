@@ -205,7 +205,7 @@ fn default_version() -> String {
     "10.10.7".into()
 }
 fn default_data_dir() -> PathBuf {
-    PathBuf::from("/config/data")
+    PathBuf::from("/var/lib/jmp")
 }
 fn default_unknown() -> UnknownRoutes {
     UnknownRoutes::Primary
@@ -532,9 +532,9 @@ impl Default for DebugConfig {
 /// The annotated example config shipped with the binary.
 pub const EXAMPLE: &str = include_str!("../config.example.toml");
 
-/// First run (no config file yet): put `config.example.toml` next to the
-/// missing `path` (only if it is not there already; `config.toml` itself is
-/// never written) and return instructions for the operator. `None` when the
+/// First run (no config file yet): try to write `config.example.toml` next to
+/// the configured `path` if its directory is writable. If not writable, return
+/// instructions telling the user to create the file manually. `None` when the
 /// config exists.
 pub fn first_run_help(path: &Path) -> Option<String> {
     if path.exists() {
@@ -544,7 +544,14 @@ pub fn first_run_help(path: &Path) -> Option<String> {
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let example = dir.join("config.example.toml");
+    
+    let example_name = if path.file_name() == Some(std::ffi::OsStr::new("jmp.toml")) {
+        "jmp.example.toml"
+    } else {
+        "config.example.toml"
+    };
+    let example = dir.join(example_name);
+    
     let wrote = if example.exists() {
         Ok(false)
     } else {
@@ -561,10 +568,10 @@ pub fn first_run_help(path: &Path) -> Option<String> {
             msg += &format!(
                 "Could not write an example to {} ({e}). The config directory must be writable \
                  by this process (uid {uid}, gid {gid}); on the host run e.g. \
-                 `chown -R {uid}:{gid} <the folder mounted at {}>`, or create the file from \
+                 `chown -R {uid}:{gid} <the folder containing {}>`, or create the file from \
                  config.example.toml in the project repository.\n",
                 example.display(),
-                dir.display()
+                path.display()
             )
         }
     }
@@ -734,10 +741,10 @@ mod tests {
     #[test]
     fn first_run_writes_example_once_and_never_the_config() {
         let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join("sub/config.toml");
+        let cfg = dir.path().join("sub/jmp.toml");
         let msg = first_run_help(&cfg).unwrap();
         assert!(msg.contains("Wrote an annotated example"), "{msg}");
-        let example = dir.path().join("sub/config.example.toml");
+        let example = dir.path().join("sub/jmp.example.toml");
         assert_eq!(std::fs::read_to_string(&example).unwrap(), EXAMPLE);
         assert!(!cfg.exists());
         // Existing example is left alone.
