@@ -10,9 +10,11 @@ ENV JMP_GIT_SHA=${JMP_GIT_SHA}
 COPY Cargo.toml Cargo.lock build.rs config.example.toml ./
 COPY src ./src
 COPY tests ./tests
+# Workspace member (Cargo.toml [workspace]); only built for `cargo xtask`.
+COPY xtask ./xtask
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release --locked \
+    cargo build --release --locked -p jellyfin-merge-proxy \
  && cp target/release/jellyfin-merge-proxy /jellyfin-merge-proxy
 
 # ---- runtime ----------------------------------------------------------------
