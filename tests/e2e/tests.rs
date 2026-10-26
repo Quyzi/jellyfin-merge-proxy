@@ -1,300 +1,16 @@
-//! End-to-end tests: two mock Jellyfin upstreams (one over TLS with a private
-//! CA), the real proxy in between, and a client doing what a TV app does.
+//! E2E test cases.
 
-use axum::body::Body;
-use axum::extract::{Request, State};
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
+use super::mock::hex;
+use super::setup::{setup, Pki};
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex};
 
 const DATA_LEN: usize = 1000;
-
-fn hex(n: u64) -> String {
-    format!("{n:032x}")
-}
-
-struct Mock {
-    name: &'static str,
-    user: String,
-    token: String,
-    views: Vec<Value>,
-    items: Vec<Value>,
-    playstate: Mutex<Vec<String>>,
-}
+const AUTH: &str =
+    r#"MediaBrowser Client="Test TV", Device="Living Room", DeviceId="dev1", Version="1.0""#;
 
 fn data() -> Vec<u8> {
     (0..DATA_LEN).map(|i| (i % 251) as u8).collect()
 }
-
-async fn mock_handler(State(m): State<Arc<Mock>>, req: Request) -> Response {
-    let path = req.uri().path().to_ascii_lowercase();
-    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    let headers = req.headers().clone();
-    let method = req.method().clone();
-    let body = axum::body::to_bytes(req.into_body(), 1 << 20)
-        .await
-        .unwrap();
-    match segs.as_slice() {
-        ["system", "info", "public"] => {
-            return axum::Json(
-                json!({"Version": "10.10.7", "ServerName": m.name, "Id": hex(0xaaaa)}),
-            )
-            .into_response()
-        }
-        ["users", "authenticatebyname"] => {
-            let v: Value = serde_json::from_slice(&body).unwrap_or_default();
-            if v["Username"] == "proxy" && v["Pw"] == "secret" {
-                return axum::Json(json!({"AccessToken": m.token, "User": {"Id": m.user}}))
-                    .into_response();
-            }
-            return StatusCode::UNAUTHORIZED.into_response();
-        }
-        _ => {}
-    }
-    if headers.get("x-emby-token").and_then(|v| v.to_str().ok()) != Some(m.token.as_str()) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    match segs.as_slice() {
-        ["userviews"] => axum::Json(json!({"Items": m.views, "TotalRecordCount": m.views.len()})).into_response(),
-        ["items"] => axum::Json(json!({"Items": m.items, "TotalRecordCount": m.items.len(), "StartIndex": 0})).into_response(),
-        ["items", id, "playbackinfo"] => axum::Json(json!({
-            "MediaSources": [{
-                "Id": id,
-                "SupportsDirectPlay": true,
-                "TranscodingUrl": format!("/videos/{id}/master.m3u8?MediaSourceId={id}&api_key={}", m.token),
-            }],
-            "PlaySessionId": "abc"
-        }))
-        .into_response(),
-        ["videos", _id, "stream"] | ["videos", _id, "stream.mkv"] => range_response(&headers),
-        ["sessions", "playing", "progress"] if method == axum::http::Method::POST => {
-            let v: Value = serde_json::from_slice(&body).unwrap_or_default();
-            m.playstate.lock().unwrap().push(v["ItemId"].as_str().unwrap_or("").to_string());
-            StatusCode::NO_CONTENT.into_response()
-        }
-        _ => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
-fn range_response(h: &HeaderMap) -> Response {
-    let d = data();
-    if let Some(r) = h
-        .get("range")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("bytes="))
-    {
-        let (a, b) = r.split_once('-').unwrap();
-        let a: usize = a.parse().unwrap();
-        let b: usize = if b.is_empty() {
-            DATA_LEN - 1
-        } else {
-            b.parse().unwrap()
-        };
-        return Response::builder()
-            .status(206)
-            .header("content-type", "video/x-matroska")
-            .header("accept-ranges", "bytes")
-            .header("content-range", format!("bytes {a}-{b}/{DATA_LEN}"))
-            .header("content-length", (b - a + 1).to_string())
-            .body(Body::from(d[a..=b].to_vec()))
-            .unwrap();
-    }
-    Response::builder()
-        .header("content-type", "video/x-matroska")
-        .header("accept-ranges", "bytes")
-        .body(Body::from(d))
-        .unwrap()
-}
-
-async fn spawn_mock(m: Arc<Mock>, tls: Option<Arc<rustls::ServerConfig>>) -> u16 {
-    let app = axum::Router::new().fallback(mock_handler).with_state(m);
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.set_nonblocking(true).unwrap();
-    let port = l.local_addr().unwrap().port();
-    match tls {
-        Some(c) => {
-            let rc = axum_server::tls_rustls::RustlsConfig::from_config(c);
-            tokio::spawn(
-                axum_server::tls_rustls::from_tcp_rustls(l, rc)
-                    .unwrap()
-                    .serve(app.into_make_service()),
-            );
-        }
-        None => {
-            tokio::spawn(
-                axum_server::from_tcp(l)
-                    .unwrap()
-                    .serve(app.into_make_service()),
-            );
-        }
-    }
-    port
-}
-
-struct Pki {
-    dir: tempfile::TempDir,
-    ca_pem: String,
-    issuer: rcgen::Issuer<'static, rcgen::KeyPair>,
-}
-
-impl Pki {
-    fn new() -> Self {
-        let mut p = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
-        p.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-        p.distinguished_name
-            .push(rcgen::DnType::CommonName, "jmp test CA");
-        let key = rcgen::KeyPair::generate().unwrap();
-        let cert = p.self_signed(&key).unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("ca.pem"), cert.pem()).unwrap();
-        let issuer = rcgen::Issuer::new(p, key);
-        Pki {
-            dir,
-            ca_pem: cert.pem(),
-            issuer,
-        }
-    }
-
-    /// Issue a leaf for `localhost`, write `<name>.pem` / `<name>.key`.
-    fn leaf(&self, name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-        let p =
-            rcgen::CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()])
-                .unwrap();
-        let key = rcgen::KeyPair::generate().unwrap();
-        let cert = p.signed_by(&key, &self.issuer).unwrap();
-        let c = self.dir.path().join(format!("{name}.pem"));
-        let k = self.dir.path().join(format!("{name}.key"));
-        std::fs::write(&c, cert.pem()).unwrap();
-        std::fs::write(&k, key.serialize_pem()).unwrap();
-        (c, k)
-    }
-
-    fn ca_path(&self) -> std::path::PathBuf {
-        self.dir.path().join("ca.pem")
-    }
-}
-
-fn server_tls(cert: &std::path::Path, key: &std::path::Path) -> Arc<rustls::ServerConfig> {
-    let t: jmp::config::TlsConfig = toml::from_str(&format!(
-        "cert_path = {:?}\nkey_path = {:?}\n",
-        cert.display().to_string(),
-        key.display().to_string()
-    ))
-    .unwrap();
-    jmp::tls::server_config(&t).unwrap()
-}
-
-fn movie(id: u64, name: &str) -> Value {
-    json!({"Id": hex(id), "ServerId": hex(0xaaaa), "Name": name, "SortName": name.to_lowercase(), "Type": "Movie", "MediaType": "Video", "ImageTags": {"Primary": "x"}})
-}
-
-struct Env {
-    _data: tempfile::TempDir,
-    _pki: Pki,
-    a: Arc<Mock>,
-    b: Arc<Mock>,
-    running: jmp::server::Running,
-    config_path: std::path::PathBuf,
-}
-
-async fn setup(proxy_tls: bool, extra: &str) -> Env {
-    jmp::tls::install_default_provider();
-    let pki = Pki::new();
-    let a = Arc::new(Mock {
-        name: "A",
-        user: hex(0xa0),
-        token: "tokenA".into(),
-        views: vec![
-            json!({"Id": hex(0xa1), "Name": "Movies", "CollectionType": "movies", "Type": "CollectionFolder"}),
-        ],
-        items: vec![movie(0xa2, "Alpha"), movie(0xa3, "Charlie")],
-        playstate: Mutex::new(vec![]),
-    });
-    let b = Arc::new(Mock {
-        name: "B",
-        user: hex(0xb0),
-        token: "tokenB".into(),
-        views: vec![
-            json!({"Id": hex(0xb1), "Name": "Movies", "CollectionType": "movies", "Type": "CollectionFolder"}),
-            json!({"Id": hex(0xb4), "Name": "Shows", "CollectionType": "tvshows", "Type": "CollectionFolder"}),
-        ],
-        items: vec![movie(0xb2, "Bravo")],
-        playstate: Mutex::new(vec![]),
-    });
-    let port_a = spawn_mock(a.clone(), None).await;
-    let (bc, bk) = pki.leaf("upstream-b");
-    let port_b = spawn_mock(b.clone(), Some(server_tls(&bc, &bk))).await;
-
-    let data = tempfile::tempdir().unwrap();
-    let mut text = format!(
-        r#"
-[proxy]
-listen = "127.0.0.1:0"
-name = "Test Proxy"
-data_dir = {data:?}
-reload_interval_secs = 0
-rewrite_secrets = false
-
-[[user]]
-name = "family"
-password = "pw"
-
-[[server]]
-name = "a"
-server = "http://127.0.0.1:{port_a}"
-user = "proxy"
-password = "secret"
-
-[[server]]
-name = "b"
-server = "https://localhost:{port_b}"
-user = "proxy"
-password = "secret"
-[server.tls]
-ca_path = {ca:?}
-
-[logging]
-filter = "warn"
-"#,
-        data = data.path().display().to_string(),
-        ca = pki.ca_path().display().to_string(),
-    );
-    if proxy_tls {
-        let (c, k) = pki.leaf("proxy");
-        text.push_str(&format!(
-            "\n[tls]\ncert_path = {:?}\nkey_path = {:?}\nmin_version = \"1.2\"\n",
-            c.display().to_string(),
-            k.display().to_string()
-        ));
-    }
-    text.push_str(extra);
-    let config_path = data.path().join("config.toml");
-    std::fs::write(&config_path, &text).unwrap();
-    let cache = jmp::config::PasswordCache::default();
-    let cfg = jmp::config::Config::load(&config_path, &cache).unwrap();
-    let running = jmp::server::start(
-        cfg,
-        jmp::server::Options {
-            config_path: Some(config_path.clone()),
-            password_cache: Some(cache),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    Env {
-        _data: data,
-        _pki: pki,
-        a,
-        b,
-        running,
-        config_path,
-    }
-}
-
-const AUTH: &str =
-    r#"MediaBrowser Client="Test TV", Device="Living Room", DeviceId="dev1", Version="1.0""#;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tv_flow_login_views_items_stream_playstate_metrics() {
@@ -302,7 +18,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
     let base = format!("http://{}", env.running.addr);
     let http = reqwest::Client::new();
 
-    // Public endpoints a TV app calls before login.
     let info: Value = http
         .get(format!("{base}/System/Info/Public"))
         .send()
@@ -348,7 +63,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
         .unwrap();
     assert_eq!(pubu, json!([]));
 
-    // Wrong password, then no token.
     let bad = http
         .post(format!("{base}/Users/AuthenticateByName"))
         .header("Authorization", AUTH)
@@ -366,7 +80,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
         401
     );
 
-    // Login.
     let auth: Value = http
         .post(format!("{base}/Users/AuthenticateByName"))
         .header("Authorization", AUTH)
@@ -383,7 +96,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
     assert!(auth["SessionInfo"]["Id"].is_string());
     assert_ne!(token, "tokenA");
 
-    // Merged views (legacy route, Authorization header with Token=).
     let views: Value = http
         .get(format!("{base}/Users/{uid}/Views"))
         .header("Authorization", format!("{AUTH}, Token=\"{token}\""))
@@ -406,7 +118,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
     );
     let movies_id = views["Items"][0]["Id"].as_str().unwrap().to_string();
 
-    // Merged + sorted items (X-Emby-Token).
     let items: Value = http
         .get(format!("{base}/Items?ParentId={movies_id}&SortBy=SortName&SortOrder=Ascending&StartIndex=0&Limit=10&userId={uid}"))
         .header("X-Emby-Token", &token)
@@ -434,7 +145,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
     }
     let bravo = items["Items"][1]["Id"].as_str().unwrap().to_string();
 
-    // PlaybackInfo: URLs point back to the proxy with the client token.
     let pi: Value = http
         .post(format!("{base}/Items/{bravo}/PlaybackInfo?UserId={uid}"))
         .header("X-Emby-Authorization", format!("{AUTH}, Token=\"{token}\""))
@@ -455,7 +165,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
         "{tu}"
     );
 
-    // Range stream from the TLS upstream, token via api_key query param.
     let r = http
         .get(format!(
             "{base}/Videos/{bravo}/stream?static=true&api_key={token}"
@@ -468,7 +177,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
     assert_eq!(r.headers()["content-range"], "bytes 10-19/1000");
     let body = r.bytes().await.unwrap();
     assert_eq!(&body[..], &data()[10..20]);
-    // Full stream.
     let full = http
         .get(format!("{base}/Videos/{bravo}/stream?static=true"))
         .header("X-MediaBrowser-Token", &token)
@@ -480,7 +188,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
         .unwrap();
     assert_eq!(full.len(), DATA_LEN);
 
-    // Playstate goes to the owning upstream, with the upstream id.
     let r = http
         .post(format!("{base}/Sessions/Playing/Progress"))
         .header("X-Emby-Token", &token)
@@ -492,7 +199,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
     assert_eq!(env.b.playstate.lock().unwrap().clone(), vec![hex(0xb2)]);
     assert!(env.a.playstate.lock().unwrap().is_empty());
 
-    // Request ids are propagated.
     let r = http
         .get(format!("{base}/System/Ping"))
         .header("x-request-id", "abc-123")
@@ -501,7 +207,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
         .unwrap();
     assert_eq!(r.headers()["x-request-id"], "abc-123");
 
-    // Metrics.
     let m = http
         .get(format!("{base}/metrics"))
         .send()
@@ -541,7 +246,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
         "no secrets or ids in metrics"
     );
 
-    // Debug endpoint is off by default.
     let r = http
         .get(format!("{base}/jmp/debug"))
         .header("X-Emby-Token", &token)
@@ -550,7 +254,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
         .unwrap();
     assert_ne!(r.status(), 200);
 
-    // Reload with a broken config keeps the old one.
     let gen = env
         .running
         .state
@@ -566,7 +269,6 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
             .load(std::sync::atomic::Ordering::Relaxed),
         gen
     );
-    // A valid change (new user) applies.
     std::fs::write(
         &env.config_path,
         good.replace(
@@ -596,12 +298,9 @@ async fn tls_listener_and_cert_validation_on_reload() {
     let info: Value = http.get(&url).send().await.unwrap().json().await.unwrap();
     assert_eq!(info["ServerName"], "Test Proxy");
 
-    // Untrusting client fails.
     let plain = reqwest::Client::new();
     assert!(plain.get(&url).send().await.is_err());
 
-    // Replace the key with one that doesn't match: reload must fail and the
-    // listener keeps serving the old certificate.
     let (_c2, k2) = env._pki.leaf("other");
     let text = std::fs::read_to_string(&env.config_path).unwrap();
     let proxy_key = env._pki.dir.path().join("proxy.key");
@@ -611,7 +310,6 @@ async fn tls_listener_and_cert_validation_on_reload() {
     let info: Value = http.get(&url).send().await.unwrap().json().await.unwrap();
     assert_eq!(info["ServerName"], "Test Proxy");
 
-    // A fresh matching pair hot-reloads.
     let (c3, k3) = env._pki.leaf("proxy3");
     let text = text
         .replace(
@@ -672,7 +370,6 @@ async fn debug_endpoint_and_separate_metrics_port() {
         .await
         .unwrap();
     let token = auth["AccessToken"].as_str().unwrap().to_string();
-    // Trigger upstream logins + an id mapping.
     let _ = http
         .get(format!("{base}/UserViews"))
         .header("X-Emby-Token", &token)
@@ -696,7 +393,6 @@ async fn debug_endpoint_and_separate_metrics_port() {
     assert_eq!(v["sessions"].as_array().unwrap().len(), 1);
     assert!(v["config"]["generation"].as_u64().unwrap() >= 1);
 
-    // Metrics live only on the separate port.
     let maddr = env.running.metrics_addr.expect("metrics listener");
     let m = http
         .get(format!("http://{maddr}/metrics"))
