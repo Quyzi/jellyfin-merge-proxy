@@ -413,7 +413,7 @@
       },
       "type": "stat",
       "title": "Upstreams down",
-      "description": "Upstream servers currently in back-off (failed health checks). Red when any is down.",
+      "description": "Configured upstream servers currently in back-off (failed health checks). Servers removed or disabled by a reload are not counted. Red when any is down.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -425,7 +425,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "count(jmp_upstream_up{instance=~\"$instance\", server=~\"$server\"} == 0) or vector(0)",
+          "expr": "count((jmp_upstream_up{instance=~\"$instance\", server=~\"$server\"} and on(instance, server) jmp_upstream_configured{instance=~\"$instance\", server=~\"$server\"} == 1) == 0) or vector(0)",
           "legendFormat": "__auto",
           "range": true,
           "instant": false,
@@ -763,7 +763,7 @@
       },
       "type": "state-timeline",
       "title": "Upstream health",
-      "description": "Health of each upstream over time: green = healthy, red = in back-off after failed checks.",
+      "description": "Health of each configured upstream over time: green = healthy, red = in back-off after failed checks. A server removed or disabled by a reload stops at the reload (no bar), it is not shown as down.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -775,7 +775,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "max by (server) (jmp_upstream_up{instance=~\"$instance\", server=~\"$server\"})",
+          "expr": "max by (server) (jmp_upstream_up{instance=~\"$instance\", server=~\"$server\"} and on(instance, server) jmp_upstream_configured{instance=~\"$instance\", server=~\"$server\"} == 1)",
           "legendFormat": "{{server}}",
           "range": true,
           "instant": false,
@@ -1891,7 +1891,7 @@
       },
       "type": "table",
       "title": "Upstream summary",
-      "description": "One row per upstream. Health, in-flight requests and token age are current; rate, p95 latency and failure share cover the selected range (failures = 5xx answers plus transport errors).",
+      "description": "One row per upstream. Health (UP, DOWN, or REMOVED for a server a reload removed or disabled), in-flight requests and token age are current; rate, p95 latency and failure share cover the selected range (failures = 5xx answers plus transport errors).",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -1903,7 +1903,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "max by (server) (jmp_upstream_up{instance=~\"$instance\", server=~\"$server\"})",
+          "expr": "max by (server) (jmp_upstream_up{instance=~\"$instance\", server=~\"$server\"} and on(instance, server) jmp_upstream_configured{instance=~\"$instance\", server=~\"$server\"} == 1) or (max by (server) (jmp_upstream_configured{instance=~\"$instance\", server=~\"$server\"}) == 0) - 1",
           "legendFormat": "__auto",
           "range": false,
           "instant": true,
@@ -2118,6 +2118,11 @@
                         "text": "DOWN",
                         "color": "red",
                         "index": 1
+                      },
+                      "-1": {
+                        "text": "REMOVED",
+                        "color": "#4c5260",
+                        "index": 2
                       }
                     }
                   }
@@ -2478,7 +2483,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (server) (increase(jmp_upstream_requests_total{instance=~\"$instance\", server=~\"$server\", status_class=~\"5xx|error\"}[$__range])) or sum by (server) (jmp_upstream_up{instance=~\"$instance\", server=~\"$server\"}) * 0",
+          "expr": "sum by (server) (increase(jmp_upstream_requests_total{instance=~\"$instance\", server=~\"$server\", status_class=~\"5xx|error\"}[$__range])) or sum by (server) (jmp_upstream_up{instance=~\"$instance\", server=~\"$server\"} and on(instance, server) jmp_upstream_configured{instance=~\"$instance\", server=~\"$server\"} == 1) * 0",
           "legendFormat": "{{server}}",
           "range": false,
           "instant": true,
