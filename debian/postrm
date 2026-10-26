@@ -3,21 +3,11 @@ set -e
 
 case "$1" in
     remove)
-        # Stop and disable service if running
-        if [ -d /run/systemd/system ]; then
-            systemctl stop jellyfin-merge-proxy.service || true
-            systemctl disable jellyfin-merge-proxy.service || true
-        fi
+#DEBHELPER#
         ;;
 
     purge)
-        # Stop and disable service
-        if [ -d /run/systemd/system ]; then
-            systemctl stop jellyfin-merge-proxy.service || true
-            systemctl disable jellyfin-merge-proxy.service || true
-            systemctl daemon-reload || true
-        fi
-
+#DEBHELPER#
         # Remove user and data directory
         if getent passwd jmp >/dev/null; then
             userdel jmp || true

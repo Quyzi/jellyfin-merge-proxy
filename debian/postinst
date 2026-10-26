@@ -20,10 +20,7 @@ case "$1" in
             chmod 640 /etc/jmp.toml
         fi
 
-        # Reload systemd if running
-        if [ -d /run/systemd/system ]; then
-            systemctl daemon-reload || true
-        fi
+#DEBHELPER#
         ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)

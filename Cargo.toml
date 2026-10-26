@@ -84,7 +84,7 @@ opt-level = 3
 [package.metadata.deb]
 maintainer = "Jellyfin Merge Proxy Contributors"
 copyright = "2024, Jellyfin Merge Proxy Contributors"
-license-file = ["LICENSE", "0"]
+license-file = "LICENSE"
 extended-description = """\
 HTTP proxy that merges several Jellyfin servers into one virtual Jellyfin server. \
 Supports hot-reloading, catalog caching, transparent id mapping, and more."""
@@ -95,11 +95,10 @@ assets = [
     ["target/release/jellyfin-merge-proxy", "/usr/bin/", "755"],
     ["config.example.toml", "/etc/jmp.toml", "644"],
     ["README.md", "/usr/share/doc/jellyfin-merge-proxy/README.md", "644"],
-    ["jellyfin-merge-proxy.service", "/usr/lib/systemd/system/jellyfin-merge-proxy.service", "644"],
+    ["jellyfin-merge-proxy.service", "/usr/lib/systemd/system/", "644"],
 ]
 conf-files = ["/etc/jmp.toml"]
 maintainer-scripts = "debian/"
-systemd-units = { enable = false }
 
 # RPM package metadata
 [package.metadata.generate-rpm]
