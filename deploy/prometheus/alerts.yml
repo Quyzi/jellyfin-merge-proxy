@@ -15,23 +15,24 @@ groups:
           description: "Prometheus could not scrape {{ $labels.instance }} for 2 minutes: the proxy is down, or the metrics listener/path/auth changed."
 
       - alert: UpstreamServerDown
-        expr: max by (instance, server) (jmp_upstream_up) == 0
+        expr: max by (instance, server) (jmp_upstream_up * on(server) jmp_upstream_configured) == 0
         for: 2m
         labels:
           severity: warning
         annotations:
           summary: "Upstream server {{ $labels.server }} is down"
-          description: "{{ $labels.server }} has been in back-off (failed health checks) for more than 2 minutes. Note: a [[server]] removed by a config reload also reads 0 until the proxy restarts."
+          description: "{{ $labels.server }} has been in back-off (failed health checks) for more than 2 minutes."
 
       - alert: NoHealthyUpstreams
         # sum(), not count(up == 1) == 0: count() of nothing is empty, not 0, so that never fired.
-        expr: sum by (instance) (jmp_upstream_up) == 0
+        # Only count configured servers (jmp_upstream_configured == 1)
+        expr: sum by (instance) (jmp_upstream_up * on(server) jmp_upstream_configured) == 0
         for: 1m
         labels:
           severity: critical
         annotations:
           summary: "No healthy upstream servers on {{ $labels.instance }}"
-          description: "Every upstream server is down or unreachable. The proxy cannot serve content."
+          description: "Every configured upstream server is down or unreachable. The proxy cannot serve content."
 
       - alert: HighErrorRate
         expr: |
