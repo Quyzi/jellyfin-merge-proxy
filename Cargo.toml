@@ -20,7 +20,9 @@ async-trait = "0.1"
 thiserror = "2"
 argon2 = "0.5"
 axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
 bytes = "1"
+chacha20poly1305 = "0.10"
 futures-util = "0.3"
 hex = "0.4"
 rand = "0.8"
@@ -30,6 +32,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 tokio = { version = "1", features = ["full"] }
 toml = "0.8"
+toml_edit = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "ansi"] }
 url = "2"
