@@ -5,6 +5,7 @@ pub mod backend;
 pub mod config;
 pub mod error;
 pub mod ids;
+pub mod merge;
 pub mod password;
 pub mod reload;
 pub mod servers;
