@@ -91,6 +91,10 @@ pub mod names {
     pub const TLS_RELOADS: &str = "jmp_tls_reloads_total";
     pub const TLS_CERT_EXPIRY: &str = "jmp_tls_cert_expiry_timestamp_seconds";
 
+    pub const SECRETS_REWRITTEN: &str = "jmp_secrets_rewritten_total";
+    pub const SECRET_REWRITE_FAILURES: &str = "jmp_secret_rewrite_failures_total";
+    pub const SECRET_DECRYPT_FAILURES: &str = "jmp_secret_decrypt_failures_total";
+
     pub const BUILD_INFO: &str = "jmp_build_info";
     pub const UPTIME: &str = "jmp_uptime_seconds";
     pub const TOKIO_WORKERS: &str = "jmp_tokio_workers";
@@ -187,6 +191,9 @@ pub const METRICS: &[MetricDef] = &[
     m!(REMOVED_SERVER_REQUESTS, Counter, "", "Requests for ids of a [[server]] that was removed (answered 410 Gone)."),
     m!(TLS_RELOADS, Counter, "target, outcome", "TLS material reloads (target: listener, upstream)."),
     m!(TLS_CERT_EXPIRY, Gauge, "cert", "notAfter of loaded certificates as unix time (cert: listener or upstream:<name>)."),
+    m!(SECRETS_REWRITTEN, Counter, "kind", "Secrets rewritten in config file: user_password, upstream_password, upstream_api_key."),
+    m!(SECRET_REWRITE_FAILURES, Counter, "", "Config file secret rewrite failures (permission/IO errors)."),
+    m!(SECRET_DECRYPT_FAILURES, Counter, "kind", "Secret decryption failures during config load (wrong key or corrupted data); kind: upstream_password, upstream_api_key."),
     m!(BUILD_INFO, Gauge, "version, git_sha", "Always 1; build metadata in labels."),
     m!(UPTIME, Gauge, "", "Seconds since process start."),
     m!(TOKIO_WORKERS, Gauge, "", "Tokio runtime worker threads."),
