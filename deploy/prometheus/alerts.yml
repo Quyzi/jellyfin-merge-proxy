@@ -15,7 +15,10 @@ groups:
           description: "Prometheus could not scrape {{ $labels.instance }} for 2 minutes: the proxy is down, or the metrics listener/path/auth changed."
 
       - alert: UpstreamServerDown
-        expr: max by (instance, server) (jmp_upstream_up * on(server) jmp_upstream_configured) == 0
+        # Only servers in the applied config: a [[server]] removed or disabled by a
+        # reload keeps its last jmp_upstream_up sample but has jmp_upstream_configured 0.
+        # (Not `up * configured`: that is 0 for every removed server, i.e. "down".)
+        expr: max by (instance, server) (jmp_upstream_up and on(instance, server) jmp_upstream_configured == 1) == 0
         for: 2m
         labels:
           severity: warning
@@ -25,8 +28,7 @@ groups:
 
       - alert: NoHealthyUpstreams
         # sum(), not count(up == 1) == 0: count() of nothing is empty, not 0, so that never fired.
-        # Only count configured servers (jmp_upstream_configured == 1)
-        expr: sum by (instance) (jmp_upstream_up * on(server) jmp_upstream_configured) == 0
+        expr: sum by (instance) (jmp_upstream_up and on(instance, server) jmp_upstream_configured == 1) == 0
         for: 1m
         labels:
           severity: critical
