@@ -1,0 +1,5 @@
+target
+.git
+*.tar.gz
+config
+deploy/data
