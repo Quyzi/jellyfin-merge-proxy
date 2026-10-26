@@ -842,6 +842,23 @@ fn query_for(
     Some(out)
 }
 
+/// Make sure the upstream `Fields` list contains `field` (case-insensitive),
+/// adding the parameter if the client sent none.
+pub(crate) fn ensure_field(q: &mut Vec<(String, String)>, field: &str) {
+    if let Some((_, v)) = q.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("fields")) {
+        if !v.split(',').any(|f| f.trim().eq_ignore_ascii_case(field)) {
+            if v.trim().is_empty() {
+                *v = field.to_string();
+            } else {
+                v.push(',');
+                v.push_str(field);
+            }
+        }
+    } else {
+        q.push(("Fields".into(), field.to_string()));
+    }
+}
+
 fn fan_outcome(e: &BackendError) -> &'static str {
     if e.is_timeout() {
         "timeout"
@@ -877,6 +894,11 @@ pub async fn fan_list(st: &Shared, r: &Req, c: &Client, spec: &ListSpec) -> Resu
             counter!(names::FANOUT_RESULTS, "endpoint" => endpoint, "server" => up.name().to_string(), "outcome" => "skipped").increment(1);
             continue;
         };
+        let mut q = q;
+        if fanout && spec.dedupe_items && cfg.merge.dedupe && spec.shape != Shape::SearchHints {
+            // Real servers only return ProviderIds when asked; dedupe needs them.
+            ensure_field(&mut q, "ProviderIds");
+        }
         queried += 1;
         let path = spec.path.clone();
         futs.push(async move {
@@ -963,6 +985,8 @@ pub async fn fan_list(st: &Shared, r: &Req, c: &Client, spec: &ListSpec) -> Resu
         let d = MeteredDeduplicator::new(
             merge::ProviderIdDeduplicator {
                 types: cfg.merge.dedupe_types.clone(),
+                // Search hints carry no ProviderIds: match on type+name+year.
+                name_year_fallback: spec.shape == Shape::SearchHints,
             },
             &server_names,
         );
@@ -1440,5 +1464,37 @@ async fn ws_loop(mut sock: WebSocket) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn q(v: &[(&str, &str)]) -> Vec<(String, String)> {
+        v.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// Regression (real Jellyfin 12.3): ProviderIds are only returned when
+    /// requested, so dedupe must ask for them whatever the client sent.
+    #[test]
+    fn ensure_field_adds_or_appends() {
+        let mut a = q(&[("Limit", "5")]);
+        ensure_field(&mut a, "ProviderIds");
+        assert_eq!(a, q(&[("Limit", "5"), ("Fields", "ProviderIds")]));
+        let mut b = q(&[("fields", "PrimaryImageAspectRatio,Path")]);
+        ensure_field(&mut b, "ProviderIds");
+        assert_eq!(
+            b,
+            q(&[("fields", "PrimaryImageAspectRatio,Path,ProviderIds")])
+        );
+        let mut c = q(&[("Fields", "providerids")]);
+        ensure_field(&mut c, "ProviderIds");
+        assert_eq!(c, q(&[("Fields", "providerids")]));
+        let mut d = q(&[("Fields", "")]);
+        ensure_field(&mut d, "ProviderIds");
+        assert_eq!(d, q(&[("Fields", "ProviderIds")]));
     }
 }
