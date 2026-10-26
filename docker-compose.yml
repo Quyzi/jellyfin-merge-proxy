@@ -17,7 +17,8 @@ services:
       # RUST_LOG: "info,jmp=debug"   # overrides [logging].filter
     volumes:
       # Config file (single-file bind mount). CREATE THE FILE FIRST on the host:
-      #   touch ./jmp.toml && chmod 644 ./jmp.toml
+      #   touch ./jmp.toml
+      #   chown 65532:65532 ./jmp.toml  # make it writable by container user
       # Then edit with [[user]] and [[server]] entries. Must be read-write (not :ro)
       # so the proxy can rewrite secrets in place. Bind-mounted single files: atomic
       # rename fails, so secret rewriting uses safe in-place write.
