@@ -18,23 +18,25 @@
   <Support>https://github.com/OWNER/jellyfin-merge-proxy/issues</Support>
   <!-- PLACEHOLDER -->
   <Project>https://github.com/OWNER/jellyfin-merge-proxy</Project>
-  <Overview>Merges several Jellyfin servers into one. TV and phone apps connect to the proxy as if it were a single Jellyfin server and see the libraries of all configured servers combined (same-named libraries merged, optional de-duplication of movies and shows). Playback, HLS transcoding and watch state go to the server that owns each item. Users and upstream servers are configured in /config/config.toml; on first start, if that file is missing, the container writes /config/config.example.toml and stops with instructions. Plain HTTP by default; TLS (inbound or to the upstream servers) is optional.</Overview>
+  <Overview>Merges several Jellyfin servers into one. TV and phone apps connect to the proxy as if it were a single Jellyfin server and see the libraries of all configured servers combined (same-named libraries merged, optional de-duplication of movies and shows). Playback, HLS transcoding and watch state go to the server that owns each item. Users and upstream servers are configured in /etc/jmp.toml; on first start, if that file is missing, the container writes jmp.example.toml next to it and stops with instructions. Plain HTTP by default; TLS (inbound or to the upstream servers) is optional. Data (id map, sessions, catalog cache, auto-generated secret key) lives in /var/lib/jmp.</Overview>
   <Category>MediaServer:Video Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:8096]/web/</WebUI>
   <TemplateURL/>
   <Icon>https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/jellyfin-logo.png</Icon>
-  <!-- Run as Unraid's nobody:users. The image works with any uid and only writes under /config. -->
+  <!-- Run as Unraid's nobody:users. The image works with any uid and writes to /var/lib/jmp. -->
   <ExtraParams>--user 99:100</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
-  <Requires>Create /config/config.toml (see the example written on first start). The appdata folder must be writable by uid 99 (nobody).</Requires>
-  <Config Name="Jellyfin port" Target="8096" Default="8096" Mode="tcp" Description="Port clients connect to ([proxy] listen in config.toml, default 0.0.0.0:8096). HTTP unless [tls] is configured." Type="Port" Display="always" Required="true" Mask="false">8096</Config>
+  <Requires>Create jmp.toml (see the example written on first start). The appdata folder must be writable by uid 99 (nobody). BACK UP YOUR SECRET KEY (/var/lib/jmp/secret.key): losing it means re-entering all upstream passwords and API keys.</Requires>
+  <Config Name="Jellyfin port" Target="8096" Default="8096" Mode="tcp" Description="Port clients connect to ([proxy] listen in jmp.toml, default 0.0.0.0:8096). HTTP unless [tls] is configured." Type="Port" Display="always" Required="true" Mask="false">8096</Config>
   <Config Name="Metrics port (optional)" Target="9090" Default="" Mode="tcp" Description="Only if [metrics] listen = &quot;0.0.0.0:9090&quot; is set; by default /metrics is served on the Jellyfin port. Leave empty to not map it." Type="Port" Display="advanced" Required="false" Mask="false"/>
-  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/jellyfin-merge-proxy" Mode="rw" Description="config.toml and the proxy's data (/config/data: id map, sessions). Must be writable by uid 99." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/jellyfin-merge-proxy</Config>
-  <Config Name="Certificates (optional)" Target="/config/certs" Default="" Mode="ro" Description="OPTIONAL. Only if config.toml enables [tls] or a [server.tls] ca_path / client certificate. Leave empty for plain HTTP; the container starts fine without it." Type="Path" Display="advanced" Required="false" Mask="false"/>
-  <Config Name="JMP_CONFIG" Target="JMP_CONFIG" Default="/config/config.toml" Description="Path of the config file inside the container." Type="Variable" Display="advanced" Required="false" Mask="false">/config/config.toml</Config>
+  <Config Name="Config file" Target="/etc/jmp.toml" Default="/mnt/user/appdata/jellyfin-merge-proxy/jmp.toml" Mode="rw" Description="jmp.toml: [proxy], [[user]], and [[server]] entries. The container writes jmp.example.toml next to it if missing. Must be writable by uid 99." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/jellyfin-merge-proxy/jmp.toml</Config>
+  <Config Name="Data directory" Target="/var/lib/jmp" Default="/mnt/user/appdata/jellyfin-merge-proxy/data" Mode="rw" Description="Id map (ids.tsv), sessions (sessions.json), catalog cache, and secret key (secret.key). Must be writable by uid 99. BACK UP secret.key!" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/jellyfin-merge-proxy/data</Config>
+  <Config Name="Certificates (optional)" Target="/config/certs" Default="" Mode="ro" Description="OPTIONAL. Only if jmp.toml enables [tls] or a [server.tls] ca_path / client certificate. Leave empty for plain HTTP; the container starts fine without it." Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="JMP_CONFIG" Target="JMP_CONFIG" Default="/etc/jmp.toml" Description="Path of the config file inside the container." Type="Variable" Display="advanced" Required="false" Mask="false">/etc/jmp.toml</Config>
+  <Config Name="JMP_SECRET_KEY (optional)" Target="JMP_SECRET_KEY" Default="" Description="Optional encryption key (64 hex characters). If unset, auto-generates secret.key in /var/lib/jmp." Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="RUST_LOG" Target="RUST_LOG" Default="" Description="Optional log filter overriding [logging] filter, e.g. info,jmp=debug. Secrets are never logged." Type="Variable" Display="advanced" Required="false" Mask="false"/>
 </Container>
