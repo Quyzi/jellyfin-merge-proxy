@@ -623,7 +623,7 @@ impl Config {
             })?;
         }
         if let Some(id) = &self.proxy.id {
-            if crate::types::normalize_hex_id(id).is_none() {
+            if crate::ids::normalize_hex_id(id).is_none() {
                 return bad("proxy.id must be 32 hex characters".into());
             }
         }
