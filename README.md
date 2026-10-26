@@ -83,10 +83,13 @@ rustls (no OpenSSL), tracing, metrics + Prometheus exporter.
 ## Quick start (Docker)
 
 ```sh
-# Create config file FIRST (Docker creates a directory if file doesn't exist)
-touch jmp.toml && chmod 644 jmp.toml
+# Create config file FIRST on the host (Docker creates a directory if file doesn't exist)
+touch jmp.toml
 cp config.example.toml jmp.toml
 $EDITOR jmp.toml                     # set [[user]] and [[server]] entries
+
+# Make it writable by container user (uid 65532)
+chown 65532:65532 jmp.toml           # or use your --user uid if different
 
 # Create and set permissions on data directory
 mkdir -p data
