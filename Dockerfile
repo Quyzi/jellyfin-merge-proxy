@@ -13,20 +13,21 @@ COPY tests ./tests
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked \
- && cp target/release/jellyfin-merge-proxy /jellyfin-merge-proxy
+ && cp target/release/jellyfin-merge-proxy /jellyfin-merge-proxy \
+ && mkdir -p /jmpdata
 
 # ---- runtime ----------------------------------------------------------------
 # Distroless-style glibc image: no shell, runs as uid 65532 (nonroot).
 FROM cgr.dev/chainguard/glibc-dynamic:latest
 COPY --from=build /jellyfin-merge-proxy /usr/local/bin/jellyfin-merge-proxy
 COPY config.example.toml /usr/share/jellyfin-merge-proxy/config.example.toml
+COPY --from=build --chown=65532:65532 --chmod=700 /jmpdata /var/lib/jmp
 ENV JMP_CONFIG=/etc/jmp.toml
 # Runs as any uid (e.g. `--user 99:100` on Unraid); writes to /var/lib/jmp for
 # data (ids.tsv, sessions.json, catalog cache, auto-generated secret.key) and
 # /etc (config file bind-mount). First start without /etc/jmp.toml writes
 # jmp.example.toml next to it (if writable) and exits with instructions. Plain HTTP by
 # default: certificates optional, only needed if config enables [tls] or [server.tls].
-RUN mkdir -p /var/lib/jmp && chown 65532:65532 /var/lib/jmp && chmod 700 /var/lib/jmp
 VOLUME ["/var/lib/jmp"]
 EXPOSE 8096
 USER 65532:65532
