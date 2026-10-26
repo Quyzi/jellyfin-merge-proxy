@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<!--
+  Unraid Community Applications template for jellyfin-merge-proxy.
+  PLACEHOLDERS: replace every "OWNER" below with the GitHub user/org that
+  publishes the image (ghcr.io/OWNER/jellyfin-merge-proxy) before using or
+  submitting this template. See unraid/README.md.
+-->
+<Container version="2">
+  <Name>jellyfin-merge-proxy</Name>
+  <!-- PLACEHOLDER: image published by OWNER -->
+  <Repository>ghcr.io/OWNER/jellyfin-merge-proxy:latest</Repository>
+  <!-- PLACEHOLDER -->
+  <Registry>https://github.com/OWNER/jellyfin-merge-proxy/pkgs/container/jellyfin-merge-proxy</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Privileged>false</Privileged>
+  <!-- PLACEHOLDER -->
+  <Support>https://github.com/OWNER/jellyfin-merge-proxy/issues</Support>
+  <!-- PLACEHOLDER -->
+  <Project>https://github.com/OWNER/jellyfin-merge-proxy</Project>
+  <Overview>Merges several Jellyfin servers into one. TV and phone apps connect to the proxy as if it were a single Jellyfin server and see the libraries of all configured servers combined (same-named libraries merged, optional de-duplication of movies and shows). Playback, HLS transcoding and watch state go to the server that owns each item. Users and upstream servers are configured in /config/config.toml; on first start, if that file is missing, the container writes /config/config.example.toml and stops with instructions. Plain HTTP by default; TLS (inbound or to the upstream servers) is optional.</Overview>
+  <Category>MediaServer:Video Tools:Utilities</Category>
+  <WebUI>http://[IP]:[PORT:8096]/web/</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/jellyfin-logo.png</Icon>
+  <!-- Run as Unraid's nobody:users. The image works with any uid and only writes under /config. -->
+  <ExtraParams>--user 99:100</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>Create /config/config.toml (see the example written on first start). The appdata folder must be writable by uid 99 (nobody).</Requires>
+  <Config Name="Jellyfin port" Target="8096" Default="8096" Mode="tcp" Description="Port clients connect to ([proxy] listen in config.toml, default 0.0.0.0:8096). HTTP unless [tls] is configured." Type="Port" Display="always" Required="true" Mask="false">8096</Config>
+  <Config Name="Metrics port (optional)" Target="9090" Default="" Mode="tcp" Description="Only if [metrics] listen = &quot;0.0.0.0:9090&quot; is set; by default /metrics is served on the Jellyfin port. Leave empty to not map it." Type="Port" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/jellyfin-merge-proxy" Mode="rw" Description="config.toml and the proxy's data (/config/data: id map, sessions). Must be writable by uid 99." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/jellyfin-merge-proxy</Config>
+  <Config Name="Certificates (optional)" Target="/config/certs" Default="" Mode="ro" Description="OPTIONAL. Only if config.toml enables [tls] or a [server.tls] ca_path / client certificate. Leave empty for plain HTTP; the container starts fine without it." Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="JMP_CONFIG" Target="JMP_CONFIG" Default="/config/config.toml" Description="Path of the config file inside the container." Type="Variable" Display="advanced" Required="false" Mask="false">/config/config.toml</Config>
+  <Config Name="RUST_LOG" Target="RUST_LOG" Default="" Description="Optional log filter overriding [logging] filter, e.g. info,jmp=debug. Secrets are never logged." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+</Container>
