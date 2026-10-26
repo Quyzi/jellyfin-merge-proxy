@@ -13,6 +13,15 @@ use serde_json::{json, Value};
 const I: &str = r#"instance=~"$instance""#;
 const IS: &str = r#"instance=~"$instance", server=~"$server""#;
 
+/// `jmp_upstream_up` limited to servers in the applied config. A `[[server]]`
+/// removed or disabled by a reload keeps its last `jmp_upstream_up` sample
+/// (metrics cannot be unregistered) but reports `jmp_upstream_configured 0`.
+fn upstream_up(sel: &str) -> String {
+    format!(
+        "(jmp_upstream_up{{{sel}}} and on(instance, server) jmp_upstream_configured{{{sel}}} == 1)"
+    )
+}
+
 // One palette for the whole board.
 const GOOD: &str = "green";
 const WARN: &str = "orange";
@@ -20,6 +29,8 @@ const BAD: &str = "red";
 const INFO: &str = "blue";
 const NEUTRAL: &str = "text";
 const ACCENT: &str = "purple";
+/// Background for "not applicable" cells (a removed server's health).
+const MUTED: &str = "#4c5260";
 
 fn rate(metric: &str, sel: &str) -> String {
     format!("rate({metric}{{{sel}}}[$__rate_interval])")
@@ -180,9 +191,9 @@ fn overview(l: &mut Layout) {
     l.add(
         Panel::stat(
             "Upstreams down",
-            "Upstream servers currently in back-off (failed health checks). Red when any is down.",
+            "Configured upstream servers currently in back-off (failed health checks). Servers removed or disabled by a reload are not counted. Red when any is down.",
             q(
-                format!("count(jmp_upstream_up{{{IS}}} == 0) or vector(0)"),
+                format!("count({} == 0) or vector(0)", upstream_up(IS)),
                 "",
             ),
         )
@@ -236,8 +247,8 @@ fn overview(l: &mut Layout) {
     l.add(
         Panel::state_timeline(
             "Upstream health",
-            "Health of each upstream over time: green = healthy, red = in back-off after failed checks.",
-            &[q(format!("max by (server) (jmp_upstream_up{{{IS}}})"), "{{server}}")],
+            "Health of each configured upstream over time: green = healthy, red = in back-off after failed checks. A server removed or disabled by a reload stops at the reload (no bar), it is not shown as down.",
+            &[q(format!("max by (server) {}", upstream_up(IS)), "{{server}}")],
         )
         .mappings(vec![map_value(&[("1", "Up", GOOD), ("0", "Down", BAD)])])
         .thresholds(steps(BAD, &[(0.5, GOOD)]))
@@ -393,9 +404,16 @@ fn upstreams(l: &mut Layout) {
     l.add(
         Panel::table(
             "Upstream summary",
-            "One row per upstream. Health, in-flight requests and token age are current; rate, p95 latency and failure share cover the selected range (failures = 5xx answers plus transport errors).",
+            "One row per upstream. Health (UP, DOWN, or REMOVED for a server a reload removed or disabled), in-flight requests and token age are current; rate, p95 latency and failure share cover the selected range (failures = 5xx answers plus transport errors).",
             &[
-                q(format!("max by (server) (jmp_upstream_up{{{IS}}})"), "").table(),
+                q(
+                    format!(
+                        "max by (server) {} or (max by (server) (jmp_upstream_configured{{{IS}}}) == 0) - 1",
+                        upstream_up(IS)
+                    ),
+                    "",
+                )
+                .table(),
                 q(all.clone(), "").table(),
                 q(
                     format!("histogram_quantile(0.95, sum by (server, le) (rate(jmp_upstream_request_duration_seconds_bucket{{{IS}}}[$__range])))"),
@@ -421,7 +439,7 @@ fn upstreams(l: &mut Layout) {
         .column(
             "Health",
             json!([
-                {"id": "mappings", "value": [map_value(&[("1", "UP", GOOD), ("0", "DOWN", BAD)])]},
+                {"id": "mappings", "value": [map_value(&[("1", "UP", GOOD), ("0", "DOWN", BAD), ("-1", "REMOVED", MUTED)])]},
                 {"id": "custom.cellOptions", "value": {"type": "color-background", "mode": "basic"}},
                 {"id": "custom.align", "value": "center"},
                 {"id": "custom.width", "value": 110}
@@ -468,7 +486,7 @@ fn upstreams(l: &mut Layout) {
             "Failed upstream requests (range)",
             "5xx answers plus transport errors per upstream in the selected range.",
             q(
-                format!(r#"sum by (server) (increase(jmp_upstream_requests_total{{{IS}, status_class=~"5xx|error"}}[$__range])) or sum by (server) (jmp_upstream_up{{{IS}}}) * 0"#),
+                format!(r#"sum by (server) (increase(jmp_upstream_requests_total{{{IS}, status_class=~"5xx|error"}}[$__range])) or sum by (server) {} * 0"#, upstream_up(IS)),
                 "{{server}}",
             )
             .instant(),

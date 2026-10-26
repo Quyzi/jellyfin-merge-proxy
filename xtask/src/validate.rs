@@ -148,6 +148,17 @@ pub fn check_expr(
             None => errs.push(format!("unknown metric `{m}`")),
         }
     }
+    // A [[server]] removed or disabled by a reload keeps its last jmp_upstream_up
+    // sample (metrics cannot be unregistered); only the configured join hides it.
+    if metrics.iter().any(|m| m == "jmp_upstream_up")
+        && !expr.contains("and on(instance, server) jmp_upstream_configured")
+    {
+        errs.push(
+            "`jmp_upstream_up` must be limited to configured servers: \
+             `and on(instance, server) jmp_upstream_configured{...} == 1`"
+                .into(),
+        );
+    }
     let mut labels = labels_in(expr);
     labels.extend(legend_labels(legend));
     for l in labels {
@@ -329,6 +340,23 @@ mod tests {
         .is_empty());
         // _bucket only exists for histograms
         assert!(!check_expr(&cat, "jmp_http_requests_total_bucket", "").is_empty());
+    }
+
+    #[test]
+    fn upstream_up_must_skip_removed_servers() {
+        let cat = catalogue();
+        assert_eq!(check_expr(&cat, "count(jmp_upstream_up == 0)", "").len(), 1);
+        assert_eq!(
+            check_expr(&cat, "max by (instance, server) (jmp_upstream_up * on(server) jmp_upstream_configured) == 0", "").len(),
+            1,
+            "up * configured reads a removed server as down"
+        );
+        assert!(check_expr(
+            &cat,
+            "count((jmp_upstream_up and on(instance, server) jmp_upstream_configured == 1) == 0)",
+            ""
+        )
+        .is_empty());
     }
 
     #[test]
