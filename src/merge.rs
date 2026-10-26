@@ -177,7 +177,7 @@ fn name_year_key(item: &Value) -> Option<String> {
     (!name.is_empty()).then(|| format!("{ty}:title:{name}:{year}"))
 }
 
-fn provider_keys(item: &Value) -> Vec<String> {
+pub(crate) fn provider_keys(item: &Value) -> Vec<String> {
     let ty = item.get("Type").and_then(|t| t.as_str()).unwrap_or("");
     let mut keys = vec![];
     if let Some(p) = item.get("ProviderIds").and_then(|p| p.as_object()) {
@@ -207,6 +207,10 @@ pub struct Ranked {
 pub struct DroppedDuplicate {
     pub key: &'static str,
     pub winner: ServerId,
+    /// Proxy ids of the kept and the dropped copy (when the items have ids).
+    pub winner_id: Option<String>,
+    pub loser_id: Option<String>,
+    pub item_type: Option<String>,
 }
 
 /// What a [`Deduplicator`] did, for metrics.
@@ -239,6 +243,8 @@ impl Deduplicator for NoDedupe {
 fn key_kind(k: &str) -> &'static str {
     if k.contains(":title:") {
         "title"
+    } else if k.contains(":index:") {
+        "index"
     } else if k.contains(":tmdb:") {
         "tmdb"
     } else if k.contains(":imdb:") {
@@ -280,54 +286,101 @@ impl Deduplicator for ProviderIdDeduplicator {
                 .map(|t| self.types.iter().any(|x| x.eq_ignore_ascii_case(t)))
                 .unwrap_or(false)
         };
-        let mut stats = DedupeStats::default();
-        let mut winner: HashMap<String, usize> = HashMap::new();
-        let mut alive = vec![true; items.len()];
-        for (i, r) in items.iter().enumerate() {
-            if !applies(&r.item) {
-                continue;
-            }
-            let keys = self.keys(&r.item);
-            let existing = keys
-                .iter()
-                .find_map(|k| winner.get(k).map(|j| (*j, key_kind(k))));
-            match existing {
-                Some((j, kind)) if alive[j] => {
-                    if r.priority < items[j].priority {
-                        alive[j] = false;
-                        stats.drops.push(DroppedDuplicate {
-                            key: kind,
-                            winner: r.server,
-                        });
-                        for k in self.keys(&items[j].item).into_iter().chain(keys.clone()) {
-                            winner.insert(k, i);
-                        }
-                    } else {
-                        alive[i] = false;
-                        stats.drops.push(DroppedDuplicate {
-                            key: kind,
-                            winner: items[j].server,
-                        });
-                        for k in keys {
-                            winner.entry(k).or_insert(j);
-                        }
-                    }
-                }
-                _ => {
-                    for k in keys {
+        dedupe_by_keys(items, |v| if applies(v) { self.keys(v) } else { vec![] })
+    }
+}
+
+/// Seasons and episodes of one show fetched from several servers: seasons
+/// match on `IndexNumber`, episodes on season + episode number (+ end
+/// number for multi-episode files). Items without numbers are all kept.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ChildIndexDeduplicator;
+
+fn child_index_key(v: &Value) -> Option<String> {
+    let n = |k: &str| v.get(k).and_then(|x| x.as_i64());
+    match v.get("Type").and_then(|t| t.as_str())? {
+        "Season" => Some(format!("Season:index:{}", n("IndexNumber")?)),
+        "Episode" => Some(format!(
+            "Episode:index:{}:{}:{}",
+            n("ParentIndexNumber")?,
+            n("IndexNumber")?,
+            n("IndexNumberEnd").unwrap_or(-1)
+        )),
+        _ => None,
+    }
+}
+
+impl Deduplicator for ChildIndexDeduplicator {
+    fn name(&self) -> &'static str {
+        "child_index"
+    }
+    fn dedupe(&self, items: Vec<Ranked>) -> (Vec<Ranked>, DedupeStats) {
+        dedupe_by_keys(items, |v| child_index_key(v).into_iter().collect())
+    }
+}
+
+fn item_id(v: &Value) -> Option<String> {
+    v.get("Id").and_then(|i| i.as_str()).map(String::from)
+}
+
+/// Shared dedupe core: items sharing any key are duplicates; the lowest
+/// priority value wins; survivors keep their relative order.
+fn dedupe_by_keys(
+    items: Vec<Ranked>,
+    keys_of: impl Fn(&Value) -> Vec<String>,
+) -> (Vec<Ranked>, DedupeStats) {
+    let mut stats = DedupeStats::default();
+    let mut winner: HashMap<String, usize> = HashMap::new();
+    let mut alive = vec![true; items.len()];
+    let drop = |kind: &'static str, w: &Ranked, l: &Ranked| DroppedDuplicate {
+        key: kind,
+        winner: w.server,
+        winner_id: item_id(&w.item),
+        loser_id: item_id(&l.item),
+        item_type: l
+            .item
+            .get("Type")
+            .and_then(|t| t.as_str())
+            .map(String::from),
+    };
+    for (i, r) in items.iter().enumerate() {
+        let keys = keys_of(&r.item);
+        if keys.is_empty() {
+            continue;
+        }
+        let existing = keys
+            .iter()
+            .find_map(|k| winner.get(k).map(|j| (*j, key_kind(k))));
+        match existing {
+            Some((j, kind)) if alive[j] => {
+                if r.priority < items[j].priority {
+                    alive[j] = false;
+                    stats.drops.push(drop(kind, r, &items[j]));
+                    for k in keys_of(&items[j].item).into_iter().chain(keys.clone()) {
                         winner.insert(k, i);
                     }
+                } else {
+                    alive[i] = false;
+                    stats.drops.push(drop(kind, &items[j], r));
+                    for k in keys {
+                        winner.entry(k).or_insert(j);
+                    }
+                }
+            }
+            _ => {
+                for k in keys {
+                    winner.insert(k, i);
                 }
             }
         }
-        stats.removed = alive.iter().filter(|a| !**a).count();
-        let out = items
-            .into_iter()
-            .zip(alive)
-            .filter_map(|(it, a)| a.then_some(it))
-            .collect();
-        (out, stats)
     }
+    stats.removed = alive.iter().filter(|a| !**a).count();
+    let out = items
+        .into_iter()
+        .zip(alive)
+        .filter_map(|(it, a)| a.then_some(it))
+        .collect();
+    (out, stats)
 }
 
 /// Keeps one entry per (case-insensitive) `Name`, preferring the lowest
@@ -355,6 +408,9 @@ impl Deduplicator for NameDeduplicator {
                     stats.drops.push(DroppedDuplicate {
                         key: "name",
                         winner: *w,
+                        winner_id: None,
+                        loser_id: item_id(&r.item),
+                        item_type: None,
                     });
                     false
                 }

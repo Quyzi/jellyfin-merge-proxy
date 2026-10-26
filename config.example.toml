@@ -106,6 +106,8 @@ priority = 10
 merge_libraries_by_name = true
 # Hide duplicate movies/series that exist on several servers (matched by
 # Tmdb/Imdb/Tvdb provider ids); the copy from the lowest `priority` wins.
+# A series on several servers shows once, and its seasons/episodes are
+# merged from every server (by season/episode number).
 dedupe = false
 dedupe_types = ["Movie", "Series"]
 # When libraries are NOT merged but share a name, append " (upstream name)".

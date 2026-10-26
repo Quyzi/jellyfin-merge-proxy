@@ -28,6 +28,7 @@ pub mod reload;
 pub mod rewrite;
 pub mod server;
 pub mod servers;
+pub mod siblings;
 pub mod telemetry;
 pub mod tls;
 pub mod types;
@@ -73,6 +74,8 @@ pub struct AppState {
     pub servers: Arc<ServerRegistry>,
     pub backend_factory: Arc<dyn BackendFactory>,
     pub ids: Arc<dyn IdMapper>,
+    /// Copies of one series/season on several servers.
+    pub siblings: Arc<siblings::SiblingTable>,
     pub sessions: Arc<auth::Sessions>,
     pub authenticator: Arc<dyn ProxyAuthenticator>,
     pub catalog: Arc<dyn CatalogCache>,
@@ -134,10 +137,11 @@ impl AppState {
         let backends =
             backend::build_all(&cfg, &registry, factory.as_ref(), tls_provider.as_ref())?;
         let data_dir = cfg.proxy.data_dir.clone();
-        let (table, sessions) = match std::fs::create_dir_all(&data_dir) {
+        let (table, sessions, siblings) = match std::fs::create_dir_all(&data_dir) {
             Ok(()) => (
                 ids::HashedIdTable::new(registry.clone()).with_persistence(&data_dir)?,
                 auth::Sessions::new(Some(data_dir.join("sessions.json"))),
+                siblings::SiblingTable::new().with_persistence(&data_dir)?,
             ),
             Err(e) => {
                 tracing::warn!(
@@ -147,6 +151,7 @@ impl AppState {
                 (
                     ids::HashedIdTable::new(registry.clone()),
                     auth::Sessions::new(None),
+                    siblings::SiblingTable::new(),
                 )
             }
         };
@@ -190,6 +195,7 @@ impl AppState {
             servers: registry,
             backend_factory: factory,
             ids,
+            siblings: Arc::new(siblings),
             sessions,
             authenticator: auth,
             catalog,

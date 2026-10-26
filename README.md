@@ -63,6 +63,14 @@ rustls (no OpenSSL), tracing, metrics + Prometheus exporter.
   `StartIndex=0&Limit=min(StartIndex+Limit, fanout_limit)`, then the proxy
   merges, optionally de-duplicates (Tmdb/Imdb/Tvdb provider ids), sorts by the
   requested `SortBy`/`SortOrder` and applies the client's paging.
+  Upstreams are always asked for `ProviderIds` when dedupe applies.
+* **Shows split across servers.** With `dedupe`, a series on several servers
+  is listed once, and its other copies are remembered as *siblings*
+  (`data_dir/siblings.tsv`). Its seasons and episodes (`/Shows/{id}/Seasons`,
+  `/Shows/{id}/Episodes`, `/Items?ParentId=`) fan out to every copy and merge
+  by season / episode number, so S01 from one server and S02 from another
+  browse as one show. Each episode still plays from (and records watch state
+  on) the server that has it.
 * **Playback.** `PlaybackInfo`, direct streams, HLS playlists and segments,
   images, subtitles and playstate reports go to the owning upstream. Response
   bodies are streamed through without buffering, `Range` is passed through,
@@ -368,12 +376,13 @@ Answered by the proxy itself:
 | `GET /Items/{view}`, `/Users/{u}/Items/{view}`, view images | merged view DTO / primary image of a member library |
 | `GET /Items`, `/Users/{u}/Items` | fan-out (or routed to the owning upstream for `ParentId`), merge, dedupe, sort, page |
 | `GET /Items/Latest`, `/UserItems/Resume`, `/Shows/NextUp`, `/Search/Hints`, `/Genres`, `/Studios`, `/Persons`, `/Artists`, ... | fan-out lists |
+| `GET /Shows/{id}/Seasons`, `/Shows/{id}/Episodes` | for a series that is on several servers (with `dedupe`): fan-out to every copy, seasons merged by number, episodes by season+episode number (priority winner kept); otherwise routed to the owner |
 | `GET /Items/Filters(2)`, `/Items/Counts` | merged objects |
 | `GET/POST /Sessions*`, `/Sessions/Playing/Ping`, `/DisplayPreferences/{id}`, `/SyncPlay/*`, `/Plugins`, ... | local stubs |
 | `/socket` | WebSocket keep-alive only |
 
 Routed to the owning upstream by the proxy id in the path/query/body:
-`/Items/{id}`, `/Users/{u}/Items/{id}`, `/Shows/{id}/Seasons|Episodes`,
+`/Items/{id}`, `/Users/{u}/Items/{id}`, `/Shows/{id}/Seasons|Episodes` (single-server series),
 `/Items/{id}/Images/*`, `/Items/{id}/PlaybackInfo`, `/Videos/{id}/*`,
 `/Audio/{id}/*` (direct and HLS: `master.m3u8`, `main.m3u8`, segments;
 playlists rewritten), subtitles, `/Sessions/Playing{,/Progress,/Stopped}`
@@ -428,6 +437,11 @@ handlers), `src/proxy.rs` (shared handler logic, fan-out, relay),
 * **Dedupe** applies only to fan-out lists, matches by Tmdb/Imdb/Tvdb (plus
   name for genre/person-style lists), and makes `TotalRecordCount`/paging
   approximate. Deep paging is bounded by `fanout_limit`.
+* **Split shows:** watch state stays per server, so `NextUp` for a show
+  split across servers can list one next episode per server. A series that
+  never appeared in a merged list is looked up on the other servers (by
+  provider id and production year) the first time its seasons/episodes are
+  opened.
 * **Sorting** of merged lists is done in the proxy from the returned item
   JSON (`SortName`, `PremiereDate`, `DateCreated`, `CommunityRating`,
   `UserData` fields, ...). Items lacking the field sort last, and sort keys

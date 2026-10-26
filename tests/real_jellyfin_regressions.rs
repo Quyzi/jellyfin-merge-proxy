@@ -176,3 +176,87 @@ async fn dedupe_requests_provider_ids_from_upstreams() {
         );
     }
 }
+
+/// A show on two servers with different episodes (s1: S01E01-02, s2: S01E02-03
+/// and S02E01). Dedupe used to hide the second copy and with it every episode
+/// only that server has; now seasons and episodes merge by number.
+#[tokio::test]
+async fn series_split_across_servers_merges_seasons_and_episodes() {
+    let env = start("[merge]\ndedupe = true\n", |m, cfg| {
+        let n = cfg.name.as_str();
+        let series = id(&["series", n]);
+        let s1 = id(&["season1", n]);
+        let s2 = id(&["season2", n]);
+        let ep = |s: i64, e: i64, season: &str| {
+            json!({"Id": id(&["ep", n, &s.to_string(), &e.to_string()]), "Type": "Episode",
+                   "Name": format!("S{s}E{e} from {n}"), "ParentIndexNumber": s, "IndexNumber": e,
+                   "SeriesId": series, "SeasonId": season})
+        };
+        m.on_json(
+            None,
+            "Items",
+            json!({"Items": [{"Id": series, "Name": "Breaking Bad", "Type": "Series", "SortName": "breaking bad",
+                              "ProductionYear": 2008, "ProviderIds": {"Tmdb": "1396"}}], "TotalRecordCount": 1}),
+        );
+        let season = |sid: &str, i: i64| json!({"Id": sid, "Type": "Season", "Name": format!("Season {i}"), "IndexNumber": i, "SeriesId": series});
+        if n == "s1" {
+            m.on_json(None, &format!("Shows/{series}/Seasons"), json!({"Items": [season(&s1, 1)], "TotalRecordCount": 1}));
+            m.on_json(None, &format!("Shows/{series}/Episodes"), json!({"Items": [ep(1, 1, &s1), ep(1, 2, &s1)], "TotalRecordCount": 2}));
+        } else {
+            m.on_json(None, &format!("Shows/{series}/Seasons"), json!({"Items": [season(&s1, 1), season(&s2, 2)], "TotalRecordCount": 2}));
+            m.on_json(None, &format!("Shows/{series}/Episodes"), json!({"Items": [ep(2, 1, &s2), ep(1, 2, &s1), ep(1, 3, &s1)], "TotalRecordCount": 3}));
+        }
+    })
+    .await;
+    let shows = env
+        .get("Items?Recursive=true&IncludeItemTypes=Series")
+        .await;
+    let shows = shows["Items"].as_array().unwrap().clone();
+    assert_eq!(shows.len(), 1, "series deduped: {shows:?}");
+    let sid = shows[0]["Id"].as_str().unwrap().to_string();
+
+    let seasons = env.get(&format!("Shows/{sid}/Seasons")).await;
+    let names: Vec<&str> = seasons["Items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["Name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Season 1", "Season 2"], "{seasons}");
+    assert_eq!(seasons["TotalRecordCount"], 2);
+
+    let eps = env.get(&format!("Shows/{sid}/Episodes")).await;
+    let names: Vec<&str> = eps["Items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["Name"].as_str().unwrap())
+        .collect();
+    // S01E02 exists on both: the priority winner (s1) is kept.
+    assert_eq!(
+        names,
+        [
+            "S1E1 from s1",
+            "S1E2 from s1",
+            "S1E3 from s2",
+            "S2E1 from s2"
+        ],
+        "{eps}"
+    );
+
+    // The season ids handed out map back to each server's own season.
+    let season1 = seasons["Items"][0]["Id"].as_str().unwrap();
+    let _ = env
+        .get(&format!("Shows/{sid}/Episodes?seasonId={season1}"))
+        .await;
+    for (i, n) in ["s1", "s2"].iter().enumerate() {
+        let want = id(&["season1", n]);
+        assert!(
+            env.mock(i).calls().iter().any(|c| c
+                .path_and_query
+                .to_ascii_lowercase()
+                .contains(&format!("seasonid={want}"))),
+            "{n} got its own season id"
+        );
+    }
+}
