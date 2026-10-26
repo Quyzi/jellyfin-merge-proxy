@@ -1,9 +1,10 @@
 //! Listener setup (plain HTTP or rustls), optional HTTP->HTTPS redirect and
-//! metrics listeners.
+//! metrics listeners, and the config/cert file watcher.
 
 use crate::backend::BackendFactory;
 use crate::config::{Config, PasswordCache};
-use crate::telemetry;
+use crate::reload::{spawn_watcher, ConfigSource, FileConfigSource, PollingWatcher};
+use crate::telemetry::{self, LogHandle};
 use crate::tls::{RustlsProvider, TlsProvider};
 use crate::{AppState, Shared, StateOptions};
 use anyhow::{Context, Result};
@@ -11,16 +12,24 @@ use axum::response::{IntoResponse, Redirect};
 use axum_server::tls_rustls::RustlsConfig;
 use axum_server::Handle;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Default)]
 pub struct Options {
+    /// Shorthand for `source: Some(FileConfigSource::new(path))`.
+    pub config_path: Option<PathBuf>,
+    /// Where reloads read the config from.
+    pub source: Option<Arc<dyn ConfigSource>>,
+    pub log: Option<LogHandle>,
     pub password_cache: Option<PasswordCache>,
     /// Defaults to Jellyfin for every `[[server]]`.
     pub backend_factory: Option<Arc<dyn BackendFactory>>,
     /// Defaults to rustls.
     pub tls_provider: Option<Arc<dyn TlsProvider>>,
+    /// Poll the config and certificate files for changes.
+    pub watch: bool,
 }
 
 pub struct Running {
@@ -81,9 +90,16 @@ pub async fn start(cfg: Config, opts: Options) -> Result<Running> {
         .and_then(|t| t.redirect_http_listen.clone());
     let http2 = cfg.tls.as_ref().map(|t| t.http2).unwrap_or(true);
 
+    let source = opts.source.or_else(|| {
+        opts.config_path
+            .map(|p| Arc::new(FileConfigSource::new(p)) as Arc<dyn ConfigSource>)
+    });
+    let watch = opts.watch && source.is_some();
     let state = AppState::with_options(
         cfg,
         StateOptions {
+            source,
+            log: opts.log,
             password_cache: opts.password_cache,
             backend_factory: opts.backend_factory,
             tls_provider: Some(tls_provider),
@@ -102,6 +118,9 @@ pub async fn start(cfg: Config, opts: Options) -> Result<Running> {
     let main = match server_tls {
         Some(sc) => {
             let rc = RustlsConfig::from_config(sc);
+            let rc2 = rc.clone();
+            *state.listener_tls.reloader.lock().unwrap() =
+                Some(Box::new(move |c| rc2.reload_from_config(c)));
             let mut server =
                 axum_server::tls_rustls::from_tcp_rustls(listener, rc)?.handle(handle.clone());
             if !http2 {
@@ -182,6 +201,13 @@ pub async fn start(cfg: Config, opts: Options) -> Result<Running> {
                 st.ids.publish_gauges();
             }
         }));
+    }
+
+    if watch {
+        tasks.push(spawn_watcher(
+            Box::new(PollingWatcher::new()),
+            state.clone(),
+        ));
     }
 
     let c = state.cfg();

@@ -6,7 +6,8 @@ const USAGE: &str = "usage: jellyfin-merge-proxy [--config PATH] [--metrics-md] 
       --metrics-md    print the METRICS.md metric reference and exit
   -V, --version       print version
 
-Logging: [logging] in the config; RUST_LOG overrides the filter.";
+Logging: [logging] in the config; RUST_LOG overrides the filter.
+SIGHUP reloads the config (it is also polled every proxy.reload_interval_secs).";
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
@@ -54,16 +55,24 @@ async fn run(path: PathBuf) -> anyhow::Result<()> {
             std::process::exit(2);
         }
     };
-    let _log = jmp::telemetry::init_logging(&cfg.logging);
+    let log = jmp::telemetry::init_logging(&cfg.logging);
     tracing::info!(version = env!("CARGO_PKG_VERSION"), git_sha = jmp::telemetry::git_sha(), config = %path.display(), "starting");
     let running = jmp::server::start(
         cfg,
         jmp::server::Options {
+            config_path: Some(path),
+            log: Some(log),
             password_cache: Some(cache),
+            watch: true,
             ..Default::default()
         },
     )
     .await?;
+
+    let _sighup = jmp::reload::spawn_watcher(
+        Box::new(jmp::reload::SighupWatcher::new()),
+        running.state.clone(),
+    );
 
     shutdown_signal().await;
     running.shutdown();
