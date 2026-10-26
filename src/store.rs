@@ -12,6 +12,7 @@ use crate::auth::Session;
 use crate::types::{ProxyItemId, UpstreamItemId};
 use std::path::PathBuf;
 
+pub mod import;
 mod memory;
 pub mod migrations;
 mod sqlite;
