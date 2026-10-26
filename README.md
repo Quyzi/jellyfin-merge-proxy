@@ -400,6 +400,7 @@ path/enabled, `[cache] enabled`/`persist_path`, `[logging] format`/`ansi`.
 
 Metrics: `jmp_config_upstream_changes_total{change="added|removed|rebuilt|changed"}`,
 `jmp_servers_active`, `jmp_servers_draining`,
+`jmp_upstream_configured` (1 while a `[[server]]` is enabled, 0 once removed or disabled),
 `jmp_servers_retired_total{outcome="drained|timeout"}`,
 `jmp_server_drain_duration_seconds`, `jmp_removed_server_requests_total`.
 

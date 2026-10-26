@@ -86,6 +86,10 @@ Operational events worth covering while traffic runs: a config hot reload (add o
 remove a `[[server]]`, change a priority), a broken config (rejected, the old one
 stays), stopping an upstream for a few minutes, and replacing the TLS certificate.
 
-Known behavior: a `[[server]]` removed by a reload keeps exporting
-`jmp_upstream_up 0` (and its other per-server series) until the proxy restarts, so it
-shows as down in the health timeline and `UpstreamServerDown` fires for it.
+Removed servers: a `[[server]]` removed or disabled by a reload keeps its last
+`jmp_upstream_up` sample (metrics cannot be unregistered) and reports
+`jmp_upstream_configured 0`. Every health view and alert joins on
+`and on(instance, server) jmp_upstream_configured == 1`, so the server is not counted
+as down: its health timeline bar stops at the reload and the upstream summary shows
+it as REMOVED. `cargo xtask check` rejects any query or alert that uses
+`jmp_upstream_up` without that join. A server added back reports configured 1 again.
