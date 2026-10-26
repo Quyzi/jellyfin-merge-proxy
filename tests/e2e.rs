@@ -234,7 +234,6 @@ listen = "127.0.0.1:0"
 name = "Test Proxy"
 data_dir = {data:?}
 reload_interval_secs = 0
-rewrite_secrets = false
 
 [[user]]
 name = "family"
