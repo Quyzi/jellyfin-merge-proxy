@@ -33,13 +33,13 @@ jobs:
         run: |
           # Extract version from tag
           TAG="${GITHUB_REF#refs/tags/release/v}"
-          echo "version=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
           
           # Check if prerelease
           if echo "$TAG" | grep -qE '\-(rc|alpha|beta)'; then
-            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
           else
-            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
           
           # Validate against Cargo.toml
@@ -269,7 +269,7 @@ jobs:
             echo "## What's Changed"
             echo ""
             if [ -n "$PREV_TAG" ]; then
-              git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD
+              git log --pretty=format:"- %s (%h)" "$PREV_TAG..HEAD"
             else
               git log --pretty=format:"- %s (%h)" HEAD
             fi
