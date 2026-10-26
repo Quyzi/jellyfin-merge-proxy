@@ -313,6 +313,10 @@ labels.
 
 ### Observability Stack
 
+![Jellyfin Merge Proxy Grafana dashboard: overview](docs/images/dashboard/01-overview.png)
+
+More screenshots of every row are in [docs/dashboard.md](docs/dashboard.md).
+
 `docker-compose.yml` also starts Prometheus and Grafana, provisioned with the
 dashboard and alert rules:
 
