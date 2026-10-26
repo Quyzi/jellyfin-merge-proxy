@@ -316,13 +316,20 @@ labels.
 Run Prometheus + Grafana with the proxy:
 
 ```sh
+# Copy and customize credentials
+cp .env.example .env
+# Edit .env and set GRAFANA_ADMIN_PASSWORD
+
 docker compose up -d
 ```
 
 This starts:
 - **jellyfin-merge-proxy** on `:8096` (main proxy)
 - **Prometheus** on `:9090` (metrics scraping + alerting)
-- **Grafana** on `:3000` (visualization, default login: `admin`/`admin`)
+- **Grafana** on `:3000` (visualization, credentials from `.env`)
+
+Default Grafana credentials: `admin` / `changeme` (set `GRAFANA_ADMIN_USER` and
+`GRAFANA_ADMIN_PASSWORD` in `.env` to change).
 
 The Grafana dashboard at **`deploy/grafana-dashboard.json`** is automatically
 provisioned and includes:
