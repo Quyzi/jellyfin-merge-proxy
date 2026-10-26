@@ -1,0 +1,42 @@
+services:
+  jellyfin-merge-proxy:
+    build:
+      context: .
+      args:
+        JMP_GIT_SHA: ${JMP_GIT_SHA:-unknown}
+    image: jellyfin-merge-proxy:latest
+    container_name: jellyfin-merge-proxy
+    restart: unless-stopped
+    ports:
+      - "8096:8096"        # Jellyfin port (HTTP, or HTTPS when [tls] is set)
+      # - "8080:8080"      # [tls].redirect_http_listen (HTTP -> HTTPS 308)
+      # - "9090:9090"      # [metrics].listen, if metrics use a separate port
+    environment:
+      JMP_CONFIG: /config/config.toml
+      # RUST_LOG: "info,jmp=debug"   # overrides [logging].filter
+    volumes:
+      # ./config/config.toml is required (copy config.example.toml). Each upstream
+      # is a [[server]] block: name, server = "https://host:port", user, password
+      # (or api_key), optional [server.tls]. The proxy itself is [proxy].
+      # ./config/config.toml is required; ./config/data must be writable by uid 65532:
+      #   mkdir -p config/data && sudo chown -R 65532:65532 config/data
+      - ./config:/config
+      # TLS material (listener cert/key, client CA, upstream CAs, mTLS client cert).
+      # Files are watched and hot-reloaded; point [tls]/[server.tls] paths here.
+      # - ./certs:/config/certs:ro
+      # Or e.g. certificates managed by certbot / Caddy on the host:
+      # - /etc/letsencrypt/live/media.example.com:/config/certs/le:ro
+
+  # Optional Prometheus scraping /metrics. Uncomment together with the volume below.
+  # prometheus:
+  #   image: cgr.dev/chainguard/prometheus:latest
+  #   restart: unless-stopped
+  #   command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+  #   ports:
+  #     - "9091:9090"
+  #   volumes:
+  #     - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #     - prometheus-data:/prometheus
+
+# volumes:
+#   prometheus-data:
