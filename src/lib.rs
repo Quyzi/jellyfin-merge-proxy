@@ -4,4 +4,5 @@ pub mod config;
 pub mod error;
 pub mod password;
 pub mod telemetry;
+pub mod tls;
 pub mod types;
