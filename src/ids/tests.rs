@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn reg(names: &[&str]) -> Arc<ServerRegistry> {
