@@ -9,8 +9,10 @@
 //! `data_dir` is not writable.
 
 use crate::auth::Session;
+use crate::config::DatabaseConfig;
 use crate::types::{ProxyItemId, UpstreamItemId};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub mod import;
 mod memory;
@@ -100,6 +102,22 @@ pub trait Store: IdStore + SiblingStore + SessionStore {
         }
         Ok(())
     }
+}
+
+/// Open the SQLite state database configured in `[database]` (default
+/// `<data_dir>/jmp.db`) and import the files older versions kept in
+/// `data_dir` (see [`import`]).
+pub fn open(cfg: &DatabaseConfig, data_dir: &Path) -> Result<Arc<dyn Store>, StoreError> {
+    let path = cfg.resolved_path(data_dir);
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|source| StoreError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    let store = Arc::new(SqliteStore::open(&path, cfg)?);
+    import::import_legacy(store.as_ref(), data_dir)?;
+    Ok(store)
 }
 
 #[cfg(test)]

@@ -140,24 +140,19 @@ impl AppState {
         let backends =
             backend::build_all(&cfg, &registry, factory.as_ref(), tls_provider.as_ref())?;
         let data_dir = cfg.proxy.data_dir.clone();
-        let (table, sessions, siblings) = match std::fs::create_dir_all(&data_dir) {
-            Ok(()) => (
-                ids::HashedIdTable::new(registry.clone()).with_persistence(&data_dir)?,
-                auth::Sessions::new(Some(data_dir.join("sessions.json"))),
-                siblings::SiblingTable::new().with_persistence(&data_dir)?,
-            ),
+        let store: Arc<dyn store::Store> = match std::fs::create_dir_all(&data_dir) {
+            Ok(()) => store::open(&cfg.database, &data_dir)?,
             Err(e) => {
                 tracing::warn!(
                     "data_dir {} not writable ({e}); ids and sessions will not persist",
                     data_dir.display()
                 );
-                (
-                    ids::HashedIdTable::new(registry.clone()),
-                    auth::Sessions::new(None),
-                    siblings::SiblingTable::new(),
-                )
+                Arc::new(store::MemoryStore::new())
             }
         };
+        let table = ids::HashedIdTable::new(registry.clone()).with_store(store.clone())?;
+        let sessions = auth::Sessions::with_store(store.clone())?;
+        let siblings = siblings::SiblingTable::new().with_store(store)?;
         let ids: Arc<dyn IdMapper> = Arc::new(ids::MeteredIdMapper::new(table, registry.clone()));
         let sessions = Arc::new(sessions);
         let auth = Arc::new(users::MeteredAuthenticator(

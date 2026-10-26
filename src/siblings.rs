@@ -10,8 +10,6 @@
 //! line) so that ids held by clients keep their merged view across restarts.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::io::{BufRead, Write};
-use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::store::{SiblingStore, StoreError};
@@ -24,38 +22,12 @@ pub struct SiblingTable {
     groups: RwLock<HashMap<ProxyItemId, Arc<Vec<ProxyItemId>>>>,
     /// Ids already looked up on the other servers (not persisted).
     checked: Mutex<HashSet<ProxyItemId>>,
-    persist: Option<Mutex<std::fs::File>>,
     store: Option<Arc<dyn SiblingStore>>,
 }
 
 impl SiblingTable {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Load `siblings.tsv` from `dir` and append new links to it.
-    pub fn with_persistence(mut self, dir: &Path) -> std::io::Result<Self> {
-        let path = dir.join("siblings.tsv");
-        if let Ok(f) = std::fs::File::open(&path) {
-            let mut n = 0usize;
-            for line in std::io::BufReader::new(f).lines().map_while(Result::ok) {
-                let mut it = line.split('\t');
-                if let (Some(a), Some(b)) = (
-                    it.next().and_then(ProxyItemId::parse),
-                    it.next().and_then(ProxyItemId::parse),
-                ) {
-                    self.union(&[a, b]);
-                    n += 1;
-                }
-            }
-            tracing::info!("loaded {n} sibling links from {}", path.display());
-        }
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-        self.persist = Some(Mutex::new(file));
-        Ok(self)
     }
 
     /// Load the links saved in `store` and save new links to it.
@@ -119,13 +91,6 @@ impl SiblingTable {
             counter!(names::PERSIST_OPS, "store" => "siblings", "op" => "save", "outcome" => outcome)
                 .increment(1);
         }
-        if let Some(f) = &self.persist {
-            let mut f = f.lock().unwrap();
-            for other in &ids[1..] {
-                let _ = writeln!(f, "{}\t{}", ids[0].as_str(), other.as_str());
-            }
-            let _ = f.flush();
-        }
     }
 
     /// Every member of `id`'s group, including `id`; None if it has no siblings.
@@ -157,8 +122,8 @@ mod tests {
 
     #[test]
     fn union_is_transitive_and_persisted() {
-        let dir = tempfile::tempdir().unwrap();
-        let t = SiblingTable::new().with_persistence(dir.path()).unwrap();
+        let store = Arc::new(crate::store::MemoryStore::new());
+        let t = SiblingTable::new().with_store(store.clone()).unwrap();
         assert!(t.group(&id(1)).is_none());
         t.link(&[id(1), id(2)]);
         t.link(&[id(3), id(2)]);
@@ -167,9 +132,13 @@ mod tests {
         assert_eq!(g.as_slice(), &[id(1), id(2), id(3)]);
         assert!(Arc::ptr_eq(&g, &t.group(&id(1)).unwrap()));
         drop(t);
-        let lines = std::fs::read_to_string(dir.path().join("siblings.tsv")).unwrap();
-        assert_eq!(lines.lines().count(), 2, "no-op links are not written");
-        let t = SiblingTable::new().with_persistence(dir.path()).unwrap();
+        use crate::store::SiblingStore;
+        assert_eq!(
+            store.load_links().unwrap().len(),
+            2,
+            "no-op links are not written"
+        );
+        let t = SiblingTable::new().with_store(store).unwrap();
         assert_eq!(t.group(&id(2)).unwrap().len(), 3);
         assert!(t.first_check(&id(9)));
         assert!(!t.first_check(&id(9)));

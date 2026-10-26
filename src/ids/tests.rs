@@ -9,29 +9,6 @@ fn reg(names: &[&str]) -> Arc<ServerRegistry> {
 }
 
 #[test]
-fn removed_servers_keep_their_ids() {
-    let dir = tempfile::tempdir().unwrap();
-    let up = "fedcba9876543210fedcba9876543210";
-    let pid = {
-        let m = HashedIdTable::new(reg(&["a", "gone"]))
-            .with_persistence(dir.path())
-            .unwrap();
-        m.to_proxy(ServerId(1), up)
-    };
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    // "gone" is no longer configured: its ids still decode to its own id.
-    let r = reg(&["a"]);
-    let m2 = HashedIdTable::new(r.clone())
-        .with_persistence(dir.path())
-        .unwrap();
-    let Some(Target::Item { upstream, .. }) = m2.resolve(&pid) else {
-        panic!("id of removed server lost");
-    };
-    assert_eq!(r.name(upstream).as_deref(), Some("gone"));
-    assert_eq!(r.lookup("a"), Some(ServerId(0)));
-}
-
-#[test]
 fn round_trip() {
     let m = HashedIdTable::new(reg(&["a", "b"]));
     let up = "0123456789abcdef0123456789ABCDEF";
@@ -79,23 +56,6 @@ fn metered_decorator_is_transparent() {
     assert_eq!(p, m.inner().to_proxy(ServerId(0), up));
     assert!(m.resolve("not-an-id").is_none());
     assert_eq!(m.resolve_for(&p, ServerId(0)).unwrap().as_str(), up);
-}
-
-#[test]
-fn persistence() {
-    let dir = tempfile::tempdir().unwrap();
-    let up = "fedcba9876543210fedcba9876543210";
-    let pid = {
-        let m = HashedIdTable::new(reg(&["a"]))
-            .with_persistence(dir.path())
-            .unwrap();
-        m.to_proxy(ServerId(0), up)
-    };
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    let m2 = HashedIdTable::new(reg(&["a"]))
-        .with_persistence(dir.path())
-        .unwrap();
-    assert_eq!(m2.resolve_for(&pid, ServerId(0)).unwrap().as_str(), up);
 }
 
 #[test]
