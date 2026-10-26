@@ -133,3 +133,126 @@ impl Drop for Stage {
         tracing::trace!(stage = self.name, us = d.as_micros() as u64, "stage done");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Route templates (bounded label values)
+// ---------------------------------------------------------------------------
+
+const KNOWN_ROOTS: &[&str] = &[
+    "system",
+    "users",
+    "useritems",
+    "userviews",
+    "userplayeditems",
+    "userfavoriteitems",
+    "items",
+    "shows",
+    "videos",
+    "audio",
+    "sessions",
+    "playback",
+    "branding",
+    "quickconnect",
+    "displaypreferences",
+    "search",
+    "genres",
+    "musicgenres",
+    "studios",
+    "persons",
+    "artists",
+    "years",
+    "livetv",
+    "localization",
+    "playingitems",
+    "web",
+    "socket",
+    "embywebsocket",
+    "syncplay",
+    "plugins",
+    "packages",
+    "scheduledtasks",
+    "metrics",
+    "jmp",
+    "movies",
+    "trailers",
+    "library",
+    "playlists",
+    "collections",
+    "instantmix",
+    "mediasegments",
+    "trickplay",
+    "lyrics",
+    "favicon.ico",
+    "robots.txt",
+    "",
+    "emby",
+];
+const NAME_ROOTS: &[&str] = &[
+    "genres",
+    "musicgenres",
+    "studios",
+    "persons",
+    "artists",
+    "years",
+];
+
+fn seg_template(seg: &str) -> String {
+    if crate::ids::looks_like_id(seg) {
+        return "{id}".into();
+    }
+    if !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+        return "{n}".into();
+    }
+    if let Some((base, ext)) = seg.rsplit_once('.') {
+        let ext_l = ext.to_ascii_lowercase();
+        let ext_t = if matches!(
+            ext_l.as_str(),
+            "m3u8" | "ts" | "mp4" | "m4s" | "vtt" | "srt" | "ass"
+        ) {
+            ext_l
+        } else {
+            "{ext}".into()
+        };
+        let b = seg_template(base);
+        return format!("{b}.{ext_t}");
+    }
+    let l = seg.to_ascii_lowercase();
+    if l.len() <= 24 && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        l
+    } else {
+        "{x}".into()
+    }
+}
+
+/// Bounded route template for metrics labels, e.g. `/items/{id}/images/primary`.
+pub fn route_template(path: &str) -> String {
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let segs: Vec<&str> = if segs.first().is_some_and(|s| s.eq_ignore_ascii_case("emby")) {
+        segs[1..].to_vec()
+    } else {
+        segs
+    };
+    let Some(first) = segs.first() else {
+        return "/".into();
+    };
+    let f = first.to_ascii_lowercase();
+    if !KNOWN_ROOTS.contains(&f.as_str()) {
+        return "/other".into();
+    }
+    if f == "web" {
+        return "/web/*".into();
+    }
+    let mut out = String::new();
+    for (i, s) in segs.iter().enumerate().take(7) {
+        out.push('/');
+        if i == 1 && NAME_ROOTS.contains(&f.as_str()) && !crate::ids::looks_like_id(s) {
+            out.push_str("{name}");
+        } else {
+            out.push_str(&seg_template(s));
+        }
+    }
+    if segs.len() > 7 {
+        out.push_str("/...");
+    }
+    out
+}
