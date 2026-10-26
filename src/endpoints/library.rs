@@ -1,0 +1,123 @@
+//! Items, merged libraries and fan-out lists.
+
+use super::{done, Flow, HandlerResult, Route};
+use crate::dto;
+use crate::handler;
+use crate::ids::Target;
+use crate::proxy::{self, ok_json, q_get, Client, ListSpec, Req};
+use crate::Shared;
+
+pub fn routes() -> Vec<Route> {
+    vec![
+        Route::auth("root-folder", handler!(root))
+            .at("users/{u}/items/{root}")
+            .at("items/{root}")
+            .at("items/root")
+            .at("users/{u}/items/root")
+            .get(),
+        Route::auth("merged-view", handler!(view))
+            .at("users/{u}/items/{view}")
+            .at("items/{view}")
+            .get(),
+        Route::auth("merged-view-image", handler!(view_image)).at("items/{view}/images/**"),
+        Route::auth("items", handler!(items))
+            .at("users/{u}/items")
+            .at("items")
+            .get(),
+        Route::auth("latest", handler!(latest))
+            .at("users/{u}/items/latest")
+            .at("items/latest")
+            .get(),
+        Route::auth("resume", handler!(resume))
+            .at("users/{u}/items/resume")
+            .at("useritems/resume")
+            .get(),
+        Route::auth("nextup", handler!(nextup))
+            .at("shows/nextup")
+            .get(),
+        Route::auth("search", handler!(search))
+            .at("search/hints")
+            .get(),
+        Route::auth("named-lists", handler!(named))
+            .at("genres")
+            .at("musicgenres")
+            .at("studios")
+            .at("persons")
+            .at("artists")
+            .at("artists/albumartists")
+            .get(),
+        Route::auth("filters", handler!(filters))
+            .at("items/filters")
+            .at("items/filters2")
+            .get(),
+        Route::auth("counts", handler!(counts))
+            .at("items/counts")
+            .get(),
+    ]
+}
+
+async fn root(st: &Shared, _r: Req, _c: &Client) -> HandlerResult {
+    done(ok_json(dto::root_folder(&st.root_id, &st.server_id)))
+}
+
+async fn view(st: &Shared, r: Req, _c: &Client) -> HandlerResult {
+    if let Some(Target::View(v)) = r.segs.last().and_then(|s| st.ids.resolve(s)) {
+        return done(ok_json(v.template.clone()));
+    }
+    Ok(Flow::Next(r))
+}
+
+async fn view_image(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    if let Some(Target::View(v)) = st.ids.resolve(&r.segs[1]) {
+        let (u, mid) = v.members[0].clone();
+        let mut segs = vec!["Items".to_string(), mid.into_string()];
+        segs.extend(r.segs[2..].iter().cloned());
+        return done(proxy::forward(st, u, r, c, Some(segs)).await?);
+    }
+    Ok(Flow::Next(r))
+}
+
+async fn items(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    if q_get(&r.query, "ParentId")
+        .and_then(crate::ids::normalize_hex_id)
+        .as_deref()
+        == Some(st.root_id.as_str())
+    {
+        let v = proxy::views(st, c, false).await;
+        let n = v.len();
+        return done(ok_json(dto::query_result(v, n, 0)));
+    }
+    done(proxy::fan_list(st, &r, c, &proxy::ITEMS).await?)
+}
+
+async fn latest(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    done(proxy::fan_list(st, &r, c, &proxy::LATEST).await?)
+}
+
+async fn resume(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    done(proxy::fan_list(st, &r, c, &proxy::RESUME).await?)
+}
+
+async fn nextup(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    done(proxy::fan_list(st, &r, c, &proxy::NEXTUP).await?)
+}
+
+async fn search(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    done(proxy::fan_list(st, &r, c, &proxy::SEARCH).await?)
+}
+
+async fn named(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    let spec = ListSpec {
+        path: r.segs.clone(),
+        ..proxy::NAMED
+    };
+    done(proxy::fan_list(st, &r, c, &spec).await?)
+}
+
+async fn filters(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    done(proxy::fan_merge_objects(st, &r, c, false).await?)
+}
+
+async fn counts(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    done(proxy::fan_merge_objects(st, &r, c, true).await?)
+}
