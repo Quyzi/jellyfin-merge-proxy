@@ -251,6 +251,20 @@ pub fn init_metrics() -> PrometheusHandle {
             }
         }
         gauge!(BUILD_INFO, "version" => env!("CARGO_PKG_VERSION"), "git_sha" => git_sha()).set(1.0);
+        // Export the reload counters at 0 from the start: a counter series that
+        // first appears at 1 is invisible to increase()/rate(), so the first
+        // failed reload would never reach the dashboard or ConfigReloadFailed.
+        for outcome in ["success", "unchanged", "error"] {
+            counter!(CONFIG_RELOADS, "outcome" => outcome).increment(0);
+        }
+        for change in ["added", "removed", "rebuilt", "changed"] {
+            counter!(CONFIG_UPSTREAM_CHANGES, "change" => change).increment(0);
+        }
+        for target in ["listener", "upstream"] {
+            for outcome in ["success", "error"] {
+                counter!(TLS_RELOADS, "target" => target, "outcome" => outcome).increment(0);
+            }
+        }
         handle
     })
     .clone()
@@ -754,6 +768,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn failure_counters_start_at_zero() {
+        init_metrics();
+        let out = render();
+        for line in [
+            r#"jmp_config_reloads_total{outcome="error"} "#,
+            r#"jmp_tls_reloads_total{target="listener",outcome="error"} "#,
+            r#"jmp_tls_reloads_total{target="upstream",outcome="error"} "#,
+        ] {
+            assert!(out.contains(line), "missing {line}");
+        }
+    }
+
+    #[test]
     fn templates_are_bounded() {
         assert_eq!(
             route_template("/Items/0123456789abcdef0123456789abcdef/Images/Primary"),
@@ -791,5 +818,4 @@ mod tests {
         names.dedup();
         assert_eq!(n, names.len(), "duplicate metric names");
     }
-
 }
