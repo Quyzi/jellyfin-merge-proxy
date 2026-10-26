@@ -558,6 +558,23 @@ pub const EXAMPLE: &str = include_str!("../config.example.toml");
 /// instructions telling the user to create the file manually. `None` when the
 /// config exists.
 pub fn first_run_help(path: &Path) -> Option<String> {
+    // Check if path is a directory (Docker creates a dir when bind-mounting a missing file)
+    if path.is_dir() {
+        return Some(format!(
+            "ERROR: config path {} is a directory, not a file.\n\
+             This happens when Docker bind-mounts a non-existent file - Docker creates a directory instead.\n\
+             Fix:\n\
+             1. Stop the container\n\
+             2. Delete the directory: rm -rf {}\n\
+             3. Create the config file on the host: touch {} && chmod 644 {}\n\
+             4. Edit the file with your [[user]] and [[server]] entries (see config.example.toml)\n\
+             5. Start the container again\n\
+             \n\
+             Alternatively, set JMP_CONFIG to point to a file inside a mounted directory volume instead of a single-file bind mount.",
+            path.display(), path.display(), path.display(), path.display()
+        ));
+    }
+    
     if path.exists() {
         return None;
     }

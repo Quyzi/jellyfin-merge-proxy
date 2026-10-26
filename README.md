@@ -83,19 +83,33 @@ rustls (no OpenSSL), tracing, metrics + Prometheus exporter.
 ## Quick start (Docker)
 
 ```sh
-mkdir -p data
+# Create config file FIRST (Docker creates a directory if file doesn't exist)
+touch jmp.toml && chmod 644 jmp.toml
 cp config.example.toml jmp.toml
 $EDITOR jmp.toml                     # set [[user]] and [[server]] entries
+
+# Create and set permissions on data directory
+mkdir -p data
 sudo chown -R 65532:65532 data       # the image runs as uid 65532 (nonroot) by default
+
 docker compose up -d --build
 docker compose logs -f
 ```
 
+**Important**:
+- Config file (`jmp.toml`) must be created **before** starting the container
+- Config must be **read-write** (not `:ro`) for automatic secret encryption
+- Data directory (`/var/lib/jmp`) holds the encryption key (`secret.key`) with mode 0600
+- For arbitrary uid (e.g., Unraid `--user 99:100`), chown the data volume first:
+  ```sh
+  docker run --rm -v jmp-data:/data alpine chown -R 99:100 /data
+  ```
+
 The image runs as any uid (`--user 99:100`, compose `user:`) and writes to
 `/var/lib/jmp` for data (id map, sessions, catalog cache, auto-generated secret
-key). Config is at `/etc/jmp.toml` (bind-mounted). If it's missing, the container
-writes `jmp.example.toml` next to it (when the directory is writable), prints what
-to do and exits with code 2. No certificates are needed: plain HTTP is the default,
+key). Config is at `/etc/jmp.toml` (bind-mounted). If the path is a directory
+(Docker creates one when bind-mounting a missing file), the container prints a
+clear error with fix instructions. No certificates are needed: plain HTTP is the default,
 and TLS inbound (`[tls]`) or to upstreams (`[server.tls]`) is opt-in.
 
 The image is a multi-stage build on Chainguard images

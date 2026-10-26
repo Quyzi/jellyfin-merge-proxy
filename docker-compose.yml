@@ -16,14 +16,17 @@ services:
       # JMP_SECRET_KEY: ""           # optional: encryption key (64 hex chars)
       # RUST_LOG: "info,jmp=debug"   # overrides [logging].filter
     volumes:
-      # Config file (single-file bind mount). Edit jmp.toml with [[user]] and
-      # [[server]] entries before starting. The image writes jmp.example.toml
-      # next to it if missing. Bind-mounted single files: atomic rename fails,
-      # so secret rewriting uses safe in-place write.
+      # Config file (single-file bind mount). CREATE THE FILE FIRST on the host:
+      #   touch ./jmp.toml && chmod 644 ./jmp.toml
+      # Then edit with [[user]] and [[server]] entries. Must be read-write (not :ro)
+      # so the proxy can rewrite secrets in place. Bind-mounted single files: atomic
+      # rename fails, so secret rewriting uses safe in-place write.
       - ./jmp.toml:/etc/jmp.toml
       # Data dir: id map (ids.tsv), sessions (sessions.json), catalog cache,
-      # and auto-generated secret key (secret.key). Must be writable by the
-      # container user (65532 unless you set `user:` below).
+      # and auto-generated secret key (secret.key). The image runs as uid 65532
+      # and /var/lib/jmp is owned by 65532:65532 mode 700. For arbitrary uid
+      # (e.g. `user: "99:100"` for Unraid), chown on the host first:
+      #   docker run --rm -v jmp-data:/data alpine chown -R 99:100 /data
       - jmp-data:/var/lib/jmp
       # OPTIONAL TLS material (listener cert/key, client CA, upstream CAs, mTLS
       # client cert). Not needed for plain HTTP, the default. Files are watched
