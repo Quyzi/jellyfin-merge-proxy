@@ -1,0 +1,99 @@
+groups:
+  - name: jellyfin-merge-proxy
+    interval: 30s
+    rules:
+      - alert: UpstreamServerDown
+        expr: jmp_upstream_up == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Upstream server {{ $labels.server }} is down"
+          description: "The upstream server {{ $labels.server }} has been down for more than 2 minutes. Health check failed or server is in back-off."
+      
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(jmp_http_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(jmp_http_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High HTTP error rate detected"
+          description: "More than 5% of requests are returning 5xx errors for the last 5 minutes. Current rate: {{ $value | humanizePercentage }}"
+      
+      - alert: TLSCertificateExpiringSoon
+        expr: (jmp_tls_cert_expiry_timestamp_seconds - time()) / 86400 < 14
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate {{ $labels.cert }} expiring soon"
+          description: "Certificate {{ $labels.cert }} will expire in {{ $value | humanizeDuration }}. Renew it before it expires."
+      
+      - alert: TLSCertificateExpiringVerySOON
+        expr: (jmp_tls_cert_expiry_timestamp_seconds - time()) / 86400 < 7
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "TLS certificate {{ $labels.cert }} expiring very soon!"
+          description: "Certificate {{ $labels.cert }} will expire in {{ $value | humanizeDuration }}. URGENT: Renew immediately!"
+      
+      - alert: ConfigReloadFailed
+        expr: increase(jmp_config_reloads_total{outcome="error"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Config reload failed"
+          description: "The proxy failed to reload its configuration. Check logs for errors. The previous config is still in effect."
+      
+      - alert: HighStreamDisconnectRate
+        expr: |
+          sum(rate(jmp_stream_end_total{outcome="client_disconnect"}[5m]))
+          /
+          sum(rate(jmp_stream_end_total[5m]))
+          > 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate of stream disconnects"
+          description: "More than 30% of streams are ending with client disconnects for the last 10 minutes. Current rate: {{ $value | humanizePercentage }}"
+      
+      - alert: CacheHitRatioLow
+        expr: |
+          sum(rate(jmp_cache_requests_total{outcome="hit"}[10m]))
+          /
+          sum(rate(jmp_cache_requests_total[10m]))
+          < 0.3
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Low cache hit ratio"
+          description: "Cache hit ratio has been below 30% for 15 minutes. Current ratio: {{ $value | humanizePercentage }}. Consider tuning cache settings."
+      
+      - alert: UpstreamHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, server) (rate(jmp_upstream_request_duration_seconds_bucket[5m]))
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High upstream latency on {{ $labels.server }}"
+          description: "p95 latency for upstream {{ $labels.server }} has been above 5 seconds for 10 minutes. Current p95: {{ $value }}s"
+      
+      - alert: NoHealthyUpstreams
+        expr: count(jmp_upstream_up == 1) == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No healthy upstream servers available"
+          description: "All upstream servers are down or unreachable. The proxy cannot serve content."
