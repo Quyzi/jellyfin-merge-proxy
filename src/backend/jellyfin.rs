@@ -52,7 +52,8 @@ impl std::fmt::Debug for AuthState {
 pub struct JellyfinBackend {
     id: ServerId,
     name: String,
-    priority: i64,
+    /// Reloadable in place (`[[server]] priority`).
+    priority: std::sync::atomic::AtomicI64,
     location: BackendLocation,
     cfg: std::sync::RwLock<UpstreamConfig>,
     tls: std::sync::RwLock<UpstreamTlsConfig>,
@@ -138,7 +139,7 @@ impl JellyfinBackend {
         Ok(JellyfinBackend {
             id,
             name: cfg.name.clone(),
-            priority: cfg.priority.unwrap_or(id.0 as i64),
+            priority: std::sync::atomic::AtomicI64::new(cfg.priority.unwrap_or(id.0 as i64)),
             location,
             credentials: std::sync::RwLock::new(credentials::from_config(&cfg)),
             cfg: std::sync::RwLock::new(cfg),
@@ -328,7 +329,7 @@ impl MediaBackend for JellyfinBackend {
         "jellyfin"
     }
     fn priority(&self) -> i64 {
-        self.priority
+        self.priority.load(std::sync::atomic::Ordering::Relaxed)
     }
     fn location(&self) -> &BackendLocation {
         &self.location
@@ -362,7 +363,7 @@ impl MediaBackend for JellyfinBackend {
             name: self.name.clone(),
             kind: self.kind(),
             url: self.location.base.clone(),
-            priority: self.priority,
+            priority: self.priority(),
             healthy: !self.is_down(),
             logged_in: st.token.is_some(),
             credentials: self.credentials.read().unwrap().kind(),
@@ -517,6 +518,14 @@ impl Reloadable for JellyfinBackend {
         if oc != Some(nc) {
             counter!(names::CONFIG_UPSTREAM_CHANGES, "change" => "changed").increment(1);
         }
+        let priority = nc.priority.unwrap_or(self.id.0 as i64);
+        if self
+            .priority
+            .swap(priority, std::sync::atomic::Ordering::Relaxed)
+            != priority
+        {
+            tracing::info!(upstream = %self.name, priority, "priority changed");
+        }
         let t = match build_transport(&self.name, &tls, timeout, &self.location.base_path, cx.tls) {
             Ok(t) => {
                 counter!(names::TLS_RELOADS, "target" => "upstream", "outcome" => "success")
@@ -563,6 +572,48 @@ pub fn version_at_least(v: &str, major: u64, minor: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::password::PasswordCache;
+    use crate::tls::RustlsProvider;
+
+    fn cfg(priority: &str) -> Config {
+        let text = format!(
+            "[[user]]\nname = \"u\"\npassword = \"p\"\n\
+             [[server]]\nname = \"a\"\nserver = \"http://127.0.0.1:1\"\n\
+             user = \"x\"\npassword = \"y\"\n{priority}\n"
+        );
+        Config::parse(&text, &PasswordCache::default()).unwrap()
+    }
+
+    /// Found against real servers: a priority-only reload kept the old
+    /// dedupe winner because the priority was fixed at construction.
+    #[tokio::test]
+    async fn priority_reloads_in_place() {
+        let old = cfg("priority = 5");
+        let b = JellyfinBackend::new(ServerId(0), old.upstreams[0].clone(), &old, &RustlsProvider)
+            .unwrap();
+        assert_eq!(b.priority(), 5);
+        let new = cfg("priority = -1");
+        let cx = ReloadContext {
+            old: &old,
+            new: &new,
+            files_changed: false,
+            tls: &RustlsProvider,
+        };
+        assert!(b.apply(&cx).await.unwrap());
+        assert_eq!(b.priority(), -1);
+        // Removing the key falls back to the position default.
+        let unset = cfg("");
+        let cx = ReloadContext {
+            old: &new,
+            new: &unset,
+            files_changed: false,
+            tls: &RustlsProvider,
+        };
+        b.apply(&cx).await.unwrap();
+        assert_eq!(b.priority(), 0);
+    }
+
     #[test]
     fn versions() {
         assert!(super::version_at_least("10.9.0", 10, 9));
