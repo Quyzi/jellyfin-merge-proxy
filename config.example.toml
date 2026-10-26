@@ -161,6 +161,17 @@ serve_stale_on_error = true    # serve an expired entry if the refresh fails
 # insecure_skip_verify = false
 
 # ---------------------------------------------------------------------------
+# State database (SQLite): id mappings, series sibling links and client
+# sessions. Restart required to change.
+# ---------------------------------------------------------------------------
+[database]
+# path = "/var/lib/jmp/jmp.db"   # default: <data_dir>/jmp.db
+journal_mode = "wal"             # "wal" | "delete" | "truncate" | "persist" | "memory" | "off"
+                                 # (use "delete" on network filesystems without shared memory)
+synchronous = "normal"           # "off" | "normal" | "full" | "extra"
+busy_timeout_ms = 5000
+
+# ---------------------------------------------------------------------------
 # Logging. RUST_LOG, when set, overrides `filter`. `filter` is hot-reloaded;
 # `format`/`ansi` need a restart. Secrets (passwords, tokens, API keys,
 # Authorization headers) are never logged.
