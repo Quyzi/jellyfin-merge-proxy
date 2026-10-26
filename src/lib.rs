@@ -16,6 +16,7 @@ pub mod auth;
 pub mod backend;
 pub mod cache;
 pub mod config;
+pub mod config_rewrite;
 pub mod dto;
 pub mod endpoints;
 pub mod error;
