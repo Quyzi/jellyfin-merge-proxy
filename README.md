@@ -313,78 +313,31 @@ labels.
 
 ### Observability Stack
 
-The dashboard provides comprehensive visibility into proxy operations following the RED method
-(Rate, Errors, Duration) for services and USE method (Utilization, Saturation, Errors) for
-infrastructure resources.
-
-Run Prometheus + Grafana with the proxy:
+`docker-compose.yml` also starts Prometheus and Grafana, provisioned with the
+dashboard and alert rules:
 
 ```sh
-# Copy and customize credentials
-cp .env.example .env
-# Edit .env and set GRAFANA_ADMIN_PASSWORD
-
-docker compose up -d
+cp .env.example .env     # set GRAFANA_ADMIN_PASSWORD
+docker compose up -d     # proxy :8096, Prometheus :9090, Grafana :3000
 ```
 
-This starts:
-- **jellyfin-merge-proxy** on `:8096` (main proxy)
-- **Prometheus** on `:9090` (metrics scraping + alerting)
-- **Grafana** on `:3000` (visualization, credentials from `.env`)
+Grafana logs in with `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` from `.env`
+(default `admin` / `changeme`) and opens the **Jellyfin Merge Proxy** dashboard
+(`deploy/grafana-dashboard.json`, also importable into an existing Grafana). It
+has 55 panels in 10 rows (overview stats with sparklines, upstream health state
+timeline, latency heatmaps, per-upstream bar gauges and summary tables, stacked
+pipeline stages, streaming, merge/dedupe, cache, auth, config/TLS with a
+certificate expiry table, process) and `datasource`, `instance` and `server`
+variables. Config reloads and TLS reloads are annotated.
 
-Default Grafana credentials: `admin` / `changeme` (set `GRAFANA_ADMIN_USER` and
-`GRAFANA_ADMIN_PASSWORD` in `.env` to change).
+The dashboard JSON is generated from `xtask/src/dashboard.rs` by
+`cargo xtask dashboard`, and `cargo test` fails if it is stale or references a
+metric or label the proxy does not export. See `DASHBOARD_TESTING.md`.
 
-The Grafana dashboard at **`deploy/grafana-dashboard.json`** is automatically
-provisioned on startup and provides:
-
-- **71 panels** across 10 collapsible rows
-- **Template variables** for filtering by datasource, server, route, and instance
-- **Annotations** for config reloads and server state changes
-- **Efficient queries** using `$__rate_interval` for rate calculations
-- **Color thresholds** on stat panels (green/yellow/red) for at-a-glance status
-
-**Testing status**: Dashboard JSON structure and metric references validated programmatically
-(`cargo run -p xtask -- validate`). Visual validation with live data should be performed locally
-following `DASHBOARD_VALIDATION.md`.
-
-- **Overview row**: At-a-glance stats with sparklines and thresholds (requests/s,
-  error rate, p95 latency, servers up, active streams/sessions, cache hit ratio,
-  cert expiry, uptime).
-- **Traffic (RED)**: Requests, errors, and latency broken down by route and status.
-- **Upstream Servers**: Per-server health timeline, latency heatmap, error breakdown,
-  fan-out outcomes, re-auth, and token age.
-- **Request Pipeline**: Stacked per-stage timing (where time goes: auth, fanout,
-  merge, dedupe, serialize, etc.) and p95 durations.
-- **Streaming**: Active streams by kind and server, throughput, TTFB, stream endings
-  (complete/disconnect/error), HLS metrics, Range requests.
-- **Merge and Dedupe**: Items in vs out, duplicates dropped by key, dedupe winner
-  by server, ID table size.
-- **Catalog Cache**: Hit/miss/stale rates, hit ratio, entries, size, refresh
-  duration/failures.
-- **Auth and Sessions**: Logins by outcome, token validations, active sessions,
-  argon2 timing.
-- **Config and TLS**: Reload outcomes, config generation, upstream changes, cert
-  expiry table, TLS reloads.
-- **Process and Runtime**: CPU, memory, file descriptors, Tokio tasks and queue depth.
-
-Prometheus alerting rules in **`deploy/prometheus/alerts.yml`** cover:
-- Upstream server down
-- High error rate (> 5%)
-- TLS certificates expiring (< 14 days warning, < 7 days critical)
-- Config reload failures
-- High stream disconnect rate
-- Low cache hit ratio
-- High upstream latency
-- No healthy upstreams available
-
-Access Grafana at **http://localhost:3000**, log in with `admin`/`admin`, and
-the "Jellyfin Merge Proxy" dashboard is ready to use. Customize template variables
-(datasource, server, route, instance) to filter views.
-
-The dashboard uses modern Grafana 10/11 panel types, efficient `$__rate_interval`
-queries, meaningful color thresholds (green/yellow/red), descriptions on every panel,
-and annotations for config reloads and server state changes.
+Prometheus alerting rules in **`deploy/prometheus/alerts.yml`** cover: proxy not
+scraped, upstream down, no healthy upstreams, 5xx ratio > 5 %, upstream p95 > 5 s,
+TLS certificates expiring (< 14 days warning, < 7 days critical), failed config
+reloads, a high stream disconnect ratio and a low cache hit ratio.
 
 ## Debug endpoint
 
