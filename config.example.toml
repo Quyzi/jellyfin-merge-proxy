@@ -15,9 +15,10 @@ name = "Jellyfin Merge Proxy"
 # id = "4a1f0c2e9b7d4e6f8a3c5b1d2e7f9a0c"
 # Jellyfin version reported to clients (clients gate features on it).
 reported_version = "10.10.7"
-# Where the id lookup table (ids.tsv) and client sessions (sessions.json)
-# are stored. Keep it on a volume so ids/logins survive restarts.
-data_dir = "/config/data"
+# Where the id lookup table (ids.tsv), client sessions (sessions.json),
+# catalog cache, and auto-generated secret key (secret.key) are stored.
+# Keep it on a volume so ids/logins/keys survive restarts.
+data_dir = "/var/lib/jmp"
 # Routes the proxy doesn't implement and that carry no known item id:
 #   "primary" = forward to the first reachable upstream (default)
 #   "empty"   = answer with an empty result / 204
@@ -34,6 +35,12 @@ reload_interval_secs = 3
 # running on it may finish for up to this many seconds before its upstream
 # session is ended.
 drain_timeout_secs = 300
+# Rewrite plaintext secrets in the config file: hash user passwords with argon2id
+# and encrypt upstream passwords/API keys with XChaCha20-Poly1305 (saved as
+# enc:v1:<base64>). Default true. The encryption key is loaded from JMP_SECRET_KEY
+# env var or data_dir/secret.key (auto-generated if missing). If the file is not
+# writable, the proxy continues with in-memory secrets and logs a warning.
+rewrite_secrets = true
 
 # ---------------------------------------------------------------------------
 # Proxy accounts. These are what you type into the Jellyfin app.
@@ -44,10 +51,10 @@ drain_timeout_secs = 300
 #   password = { plain = "plaintext" }
 #   password = { argon2 = "$argon2id$v=19$m=19456,t=2,p=1$..." }
 #   password = "$argon2id$..."          (bare PHC strings are detected)
-# Plaintext values are hashed with argon2id (random salt) as soon as the file
-# is read; only the hash is kept in memory and the plaintext buffer is
-# zeroized. The file on disk is never rewritten - prefer storing a hash.
-# Generate one e.g. with:  echo -n 'secret' | argon2 "$(openssl rand -hex 8)" -id -e
+# Plaintext values are hashed with argon2id (random salt) when the config is
+# loaded. If rewrite_secrets=true (default), the hash is written back to the file
+# (replacing the plaintext), so plaintext never stays on disk. Generate a hash:
+#   echo -n 'secret' | argon2 "$(openssl rand -hex 8)" -id -e
 # ---------------------------------------------------------------------------
 [[user]]
 name = "family"
@@ -67,13 +74,15 @@ password = { plain = "also-change-me" }
 #            out: renaming a server invalidates client-cached ids for it.
 #   server   base URL (a sub-path like https://host/jellyfin works too)
 #   user     upstream login name
-#   password upstream password (plaintext: it is sent to the upstream, so it
-#            cannot be stored hashed)
+#   password upstream password (plaintext accepted; if rewrite_secrets=true,
+#            encrypted to enc:v1:<base64> with XChaCha20-Poly1305 and written back)
 #   api_key  optional, instead of password (Dashboard -> API Keys); `user`
 #            or `user_id` then picks whose library and watch state are used
+#            (also encrypted if rewrite_secrets=true)
 #
 # With user + password the proxy logs in, caches the token and logs in
-# again automatically on 401.
+# again automatically on 401. BACK UP YOUR SECRET KEY: losing data_dir/secret.key
+# (or JMP_SECRET_KEY env) means re-entering all upstream passwords and API keys.
 # ---------------------------------------------------------------------------
 [[server]]
 name = "gummybear"

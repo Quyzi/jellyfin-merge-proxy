@@ -51,12 +51,58 @@ client ─► axum router (telemetry middleware)
 | `MergeStrategy` | `merge` | `MergeByNameAndType`, `KeepSeparate` | Groups libraries across servers (`[merge].merge_libraries_by_name`). |
 | `Deduplicator` | `merge` | `NoDedupe`, `ProviderIdDeduplicator`, `NameDeduplicator`, `MeteredDeduplicator<D>` | Removes duplicate items across servers in merged lists. |
 | `CatalogCache` | `cache` | `NoCache`, `MemoryCatalogCache` (TTL + max entries), `DiskCatalogCache` (memory + JSON file), `MeteredCache<C>` | Caches per-server library views (`[cache]`). |
-| `ConfigSource` | `reload` | `FileConfigSource`, `StaticConfigSource` | Where the config comes from (read-only; the TOML file is never rewritten). |
+| `ConfigSource` | `reload` | `FileConfigSource`, `StaticConfigSource` | Where the config comes from. |
 | `ConfigWatcher` | `reload` | `PollingWatcher` (mtime + size of config + TLS files, default every 3 s), `SighupWatcher` | What triggers a reload; run via `reload::spawn_watcher`. |
 | `Reloadable` | `reload` | `BackendManager` (the server set; each `MediaBackend` applies its own in-place changes), `MeteredAuthenticator` (users), `SessionPruner`, `LogFilter`, `ListenerTls`, `CatalogCacheReload`, `RestartNotices` | Two-phase hot reload through `ReloadHub`: every subscriber validates, then every subscriber applies. A failed validation keeps the old config. |
 | `TlsProvider` | `tls` | `RustlsProvider` | Listener and upstream rustls configs, certificate expiry. |
 | `ResponseRewriter` | `rewrite` | `JsonIdRewriter`, `HlsPlaylistRewriter`, `LocationHeaderRewriter`, `MeteredRewriter<R>` | Ordered `RewriteChain` applied to upstream responses (ids, playlist URLs, redirects). |
 | `Endpoint` | `endpoints` | `Route` (pattern + `Access` + handler fn) | Ordered `Registry`; modules `system`, `users`, `library`, `sessions`, `compat`, `fallback`. A handler may return `Flow::Next` to defer to the next match. |
+| `SecretCipher` | `secrets` | `XChaCha20Cipher` | Encrypts and decrypts upstream passwords and API keys with authenticated encryption (XChaCha20-Poly1305 AEAD). Encrypted values are prefixed `enc:v1:<base64>`. |
+| `KeyStore` | `secrets` | `DefaultKeyStore` | Manages the encryption key: reads from `JMP_SECRET_KEY` env var, or `/var/lib/jmp/secret.key` file, or auto-generates (with 0600 permissions) on first run. |
+
+## Secret management (`src/secrets.rs`, `src/config_rewrite.rs`)
+
+The proxy protects secrets at rest:
+
+* **User passwords** (`[[user]]`) are hashed with argon2id on first load and
+  written back to the config file as PHC strings (`$argon2id$...`). Plaintext
+  passwords are never kept in memory or on disk after the first load.
+* **Upstream secrets** (`[[server]] password` and `api_key`) are encrypted
+  with XChaCha20-Poly1305 AEAD and written back as `enc:v1:<base64>`. The
+  proxy decrypts them in memory when needed. Plaintext secrets are accepted
+  as input (that's how users enter them) but are replaced on disk after the
+  first load.
+
+The encryption key is managed by `KeyStore` (trait) / `DefaultKeyStore`
+(default impl):
+
+1. Reads `JMP_SECRET_KEY` env var (64 hex characters), or
+2. Reads `/var/lib/jmp/secret.key`, or
+3. Auto-generates a 256-bit key and saves it to `/var/lib/jmp/secret.key`
+   with 0600 permissions.
+
+The key file is logged clearly on generation with a warning to back it up:
+losing it means re-entering all upstream secrets.
+
+`config_rewrite::rewrite_secrets(path, cache, cipher)` modifies the TOML
+file in place using `toml_edit` (preserves comments, formatting, and order):
+
+* Hashes plaintext user passwords → argon2id PHC
+* Encrypts plaintext upstream secrets → `enc:v1:<base64>`
+* Skips already-hashed/encrypted values (idempotent)
+* Writes atomically via temp file + rename; falls back to in-place write
+  (truncate + write + fsync) when rename fails with `EXDEV`/`EBUSY` (bind-
+  mounted single file in Docker/Unraid)
+* Emits `jmp_secrets_rewritten_total` (by kind), `jmp_secret_rewrite_failures_total`,
+  and `jmp_secret_decrypt_failures_total` metrics
+
+The rewrite is controlled by `[proxy] rewrite_secrets = true` (default) and
+runs automatically during `Config::load` after validation. A wrong or missing
+key for existing `enc:` values logs a clear error per server and skips that
+server (no crash; the rest of the config loads).
+
+Secret types redact in `Debug` and `Display`, and are zeroized on drop
+(`zeroize` crate).
 
 ## Extending
 
@@ -73,6 +119,9 @@ client ─► axum router (telemetry middleware)
   (and `Reloadable` if it reads the config).
 * **Another cache store**: implement `CatalogCache`; wrap it in
   `MeteredCache` to keep the `jmp_cache_*` metrics.
+* **A different secret encryption scheme**: implement `SecretCipher` and
+  `KeyStore`, pass them in `StateOptions`. The `enc:v1:` prefix allows for
+  future versioning.
 
 ## Server set (`src/servers.rs`)
 

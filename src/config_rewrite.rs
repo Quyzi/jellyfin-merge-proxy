@@ -26,9 +26,9 @@ pub fn rewrite_secrets(
         source: e,
     })?;
 
-    let mut doc: DocumentMut = text.parse().map_err(|e| {
-        ConfigError::Invalid(format!("failed to parse TOML for rewriting: {e}"))
-    })?;
+    let mut doc: DocumentMut = text
+        .parse()
+        .map_err(|e| ConfigError::Invalid(format!("failed to parse TOML for rewriting: {e}")))?;
 
     let mut modified = false;
 
@@ -52,14 +52,18 @@ pub fn rewrite_secrets(
     }
 
     // Encrypt [[server]] passwords and api_keys
-    if let Some(servers) = doc.get_mut("server").and_then(|v| v.as_array_of_tables_mut()) {
+    if let Some(servers) = doc
+        .get_mut("server")
+        .and_then(|v| v.as_array_of_tables_mut())
+    {
         for server_table in servers.iter_mut() {
             if let Some(password_item) = server_table.get_mut("password") {
                 if let Some(encrypted) = rewrite_secret(password_item, cipher)? {
                     if let Some(val) = password_item.as_value_mut() {
                         *val = Value::from(encrypted);
                         modified = true;
-                        counter!(names::SECRETS_REWRITTEN, "kind" => "upstream_password").increment(1);
+                        counter!(names::SECRETS_REWRITTEN, "kind" => "upstream_password")
+                            .increment(1);
                     }
                 }
             }
@@ -68,7 +72,8 @@ pub fn rewrite_secrets(
                     if let Some(val) = api_key_item.as_value_mut() {
                         *val = Value::from(encrypted);
                         modified = true;
-                        counter!(names::SECRETS_REWRITTEN, "kind" => "upstream_api_key").increment(1);
+                        counter!(names::SECRETS_REWRITTEN, "kind" => "upstream_api_key")
+                            .increment(1);
                     }
                 }
             }
@@ -95,22 +100,19 @@ fn rewrite_user_password(
         RawPassword::Tagged(TaggedPassword::Argon2(_)) => Ok(None),
         RawPassword::Bare(s) if s.starts_with("$argon2") => Ok(None),
         _ => {
-            let hashed = cache.normalize(user, &raw).map_err(|e| {
-                ConfigError::Password {
+            let hashed = cache
+                .normalize(user, &raw)
+                .map_err(|e| ConfigError::Password {
                     user: user.to_string(),
                     source: e,
-                }
-            })?;
+                })?;
             Ok(Some(hashed.phc().to_string()))
         }
     }
 }
 
 /// Encrypt a secret if it's plaintext. Returns `Some(encrypted)` if modified.
-fn rewrite_secret(
-    item: &Item,
-    cipher: &dyn SecretCipher,
-) -> Result<Option<String>, ConfigError> {
+fn rewrite_secret(item: &Item, cipher: &dyn SecretCipher) -> Result<Option<String>, ConfigError> {
     let plaintext = match item.as_str() {
         Some(s) if !cipher.is_encrypted(s) => s,
         _ => return Ok(None),
@@ -156,7 +158,7 @@ fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), ConfigError> {
 
     // Try atomic rename first
     match write_via_temp(path, dir, contents) {
-        Ok(()) => return Ok(()),
+        Ok(()) => Ok(()),
         Err(e) if is_cross_device_or_busy(&e) => {
             // Bind-mounted file: fall back to in-place write
             tracing::warn!(
@@ -164,9 +166,9 @@ fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), ConfigError> {
                 "temp file rename failed (likely bind-mounted); writing in place"
             );
             write_in_place(path, contents)?;
-            return Ok(());
+            Ok(())
         }
-        Err(e) => return Err(e),
+        Err(e) => Err(e),
     }
 }
 
@@ -184,12 +186,10 @@ fn write_via_temp(path: &Path, dir: &Path, contents: &[u8]) -> Result<(), Config
         source: e,
     })?;
 
-    temp_file
-        .write_all(contents)
-        .map_err(|e| ConfigError::Io {
-            path: temp_path.clone(),
-            source: e,
-        })?;
+    temp_file.write_all(contents).map_err(|e| ConfigError::Io {
+        path: temp_path.clone(),
+        source: e,
+    })?;
 
     temp_file.sync_all().map_err(|e| ConfigError::Io {
         path: temp_path.clone(),
@@ -242,10 +242,7 @@ fn write_in_place(path: &Path, contents: &[u8]) -> Result<(), ConfigError> {
 
 fn is_cross_device_or_busy(e: &ConfigError) -> bool {
     if let ConfigError::Io { source, .. } = e {
-        matches!(
-            source.raw_os_error(),
-            Some(libc::EXDEV) | Some(libc::EBUSY)
-        )
+        matches!(source.raw_os_error(), Some(libc::EXDEV) | Some(libc::EBUSY))
     } else {
         false
     }
@@ -372,7 +369,7 @@ api_key = "myapikey"
         let doc: DocumentMut = rewritten.parse().unwrap();
         let servers = doc.get("server").unwrap().as_array_of_tables().unwrap();
         let srv = servers.iter().next().unwrap();
-        
+
         let encrypted_password = srv.get("password").unwrap().as_str().unwrap();
         let encrypted_api_key = srv.get("api_key").unwrap().as_str().unwrap();
 

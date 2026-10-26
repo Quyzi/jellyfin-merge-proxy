@@ -39,7 +39,10 @@ impl Secret {
         self.0.starts_with("enc:v1:")
     }
     /// Decrypt if encrypted, otherwise return plaintext.
-    pub fn decrypt(&self, cipher: &dyn crate::secrets::SecretCipher) -> Result<Secret, ConfigError> {
+    pub fn decrypt(
+        &self,
+        cipher: &dyn crate::secrets::SecretCipher,
+    ) -> Result<Secret, ConfigError> {
         if self.is_encrypted() {
             Ok(Secret(cipher.decrypt(&self.0)?))
         } else {
@@ -562,14 +565,14 @@ pub fn first_run_help(path: &Path) -> Option<String> {
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    
+
     let example_name = if path.file_name() == Some(std::ffi::OsStr::new("jmp.toml")) {
         "jmp.example.toml"
     } else {
         "config.example.toml"
     };
     let example = dir.join(example_name);
-    
+
     let wrote = if example.exists() {
         Ok(false)
     } else {
@@ -626,7 +629,7 @@ impl Config {
             path: path.to_path_buf(),
             source: e,
         })?;
-        
+
         // Parse to get the data_dir (needed for key loading)
         let raw: RawConfig = match toml::from_str(&text) {
             Ok(r) => r,
@@ -643,14 +646,14 @@ impl Config {
                 return Err(e.into());
             }
         };
-        
+
         let data_dir = raw.proxy.data_dir.clone();
-        
+
         // Load encryption key
         let key_store = crate::secrets::DefaultKeyStore;
         let key = key_store.load(&data_dir)?;
         let cipher = crate::secrets::XChaCha20Cipher::new(key);
-        
+
         // Rewrite secrets if enabled and writable
         if raw.proxy.rewrite_secrets {
             match crate::config_rewrite::rewrite_secrets(path, cache, &cipher) {
@@ -672,7 +675,7 @@ impl Config {
                 }
             }
         }
-        
+
         let r = Self::parse_with_cipher(&text, cache, Some(&cipher));
         text.zeroize();
         r
@@ -715,7 +718,7 @@ impl Config {
                 password,
             });
         }
-        
+
         // Decrypt upstream secrets
         let mut upstreams = raw.upstreams.clone();
         if let Some(c) = cipher {
@@ -736,7 +739,7 @@ impl Config {
                 }
             }
         }
-        
+
         // `raw` (and with it every plaintext) is dropped + zeroized here.
         let cfg = Config {
             proxy: raw.proxy.clone(),
