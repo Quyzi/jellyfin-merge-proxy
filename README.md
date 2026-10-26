@@ -21,6 +21,7 @@ rustls (no OpenSSL), tracing, metrics + Prometheus exporter.
 
 - [How it works](#how-it-works)
 - [Quick start (Docker)](#quick-start-docker)
+- [Unraid](#unraid)
 - [Running without Docker](#running-without-docker)
 - [Adding the server in a TV / client app](#adding-the-server-in-a-tv--client-app)
 - [Configuration](#configuration)
@@ -33,6 +34,7 @@ rustls (no OpenSSL), tracing, metrics + Prometheus exporter.
 - [API surface](#api-surface)
 - [Architecture](#architecture)
 - [Development](#development)
+- [Testing against real Jellyfin servers](#testing-against-real-jellyfin-servers)
 - [Limitations](#limitations)
 
 ## How it works
@@ -81,13 +83,20 @@ rustls (no OpenSSL), tracing, metrics + Prometheus exporter.
 ## Quick start (Docker)
 
 ```sh
-mkdir -p config/data
+mkdir -p config
 cp config.example.toml config/config.toml
 $EDITOR config/config.toml           # set [[user]] and [[server]] entries
-sudo chown -R 65532:65532 config/data  # the image runs as uid 65532 (nonroot)
+sudo chown -R 65532:65532 config     # the image runs as uid 65532 (nonroot) by default
 docker compose up -d --build
 docker compose logs -f
 ```
+
+The image runs as any uid (`--user 99:100`, compose `user:`) and only writes
+under `/config` (`/config/data` for the id map and sessions). If
+`/config/config.toml` is missing it writes `/config/config.example.toml`
+(when `/config` is writable), prints what to do and exits with code 2.
+No certificates are needed: plain HTTP is the default, and TLS inbound
+(`[tls]`) or to upstreams (`[server.tls]`) is opt-in.
 
 The image is a multi-stage build on Chainguard images
 (`cgr.dev/chainguard/rust` → `cgr.dev/chainguard/glibc-dynamic`): no shell,
@@ -99,6 +108,16 @@ to stamp the build.
 
 There is no `HEALTHCHECK` in the image (no shell/curl in the runtime image);
 probe `GET /System/Ping` or `/metrics` from your orchestrator instead.
+
+## Unraid
+
+[`unraid/jellyfin-merge-proxy.xml`](unraid/jellyfin-merge-proxy.xml) is a
+Community Applications template (bridge network, port 8096, `/config` on
+`/mnt/user/appdata/jellyfin-merge-proxy`, `--user 99:100`, an optional
+certificates path that is never required). The image name in it is a
+placeholder (`ghcr.io/OWNER/...`). Install steps, first-run config and TV
+setup: [`unraid/README.md`](unraid/README.md). The XML is checked with
+`xmllint --noout unraid/jellyfin-merge-proxy.xml`.
 
 ## Running without Docker
 
@@ -406,7 +425,7 @@ proxy section is rejected with a hint to rename it to `[proxy]`.
 
 ```sh
 cargo build --release
-cargo test                 # 36 unit tests + 4 end-to-end tests (mock HTTP upstreams, rcgen PKI) + 1 in-memory MockBackend test + 2 hot-reload tests
+cargo test                 # 42 unit + 4 end-to-end (mock HTTP upstreams, rcgen PKI) + 1 MockBackend + 2 hot-reload + 3 real-Jellyfin regression tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 cargo run -q -- --metrics-md > METRICS.md   # after changing telemetry::METRICS
@@ -424,9 +443,25 @@ handlers), `src/proxy.rs` (shared handler logic, fan-out, relay),
 `src/tls.rs` (`TlsProvider`), `src/server.rs` (listeners), `src/auth.rs`
 (client tokens, sessions), `src/telemetry.rs` (metrics, logging), `src/paths.rs`, `src/dto.rs`.
 
+## Testing against real Jellyfin servers
+
+`scripts/real-jellyfin/start-servers.sh` starts three real Jellyfin
+containers with generated H.264/AAC media (unique and duplicated titles, a
+show split across two servers, an HTTPS server with a private CA), and
+`scripts/real-jellyfin-test.sh` drives the proxy like a client through
+login, browsing, playback (direct stream with Range, HLS checked with
+ffprobe, subtitles), user data (verified on the owning upstream) and eleven
+config scenarios (merge/dedupe/priority, server down and back, API key
+upstream, HTTPS upstream, TLS listener, hot reload, cache, `unknown_routes`).
+Set `JMP_IMAGE` to run the proxy from the container image instead of the
+binary. Details: [`scripts/real-jellyfin/README.md`](scripts/real-jellyfin/README.md).
+Bugs it found have regression tests in `tests/real_jellyfin_regressions.rs`.
+
 ## Limitations
 
-* **Not tested against real servers or clients.** Only mock upstreams; no
+* **Tested against real Jellyfin servers, not real client apps.** The
+  real-server suite (Jellyfin 12.3.0) issues the HTTP calls a client makes
+  with curl; no TV, phone or desktop app has been tried, so no
   client-compatibility claims are made.
 * **Shared upstream identity.** All proxy users use the same upstream
   account per server, so watch state, favourites, resume points and parental
@@ -451,8 +486,9 @@ handlers), `src/proxy.rs` (shared handler logic, fan-out, relay),
 * **WebSocket** only answers keep-alives; no remote control, no server-pushed
   library/playstate updates.
 * **No** SyncPlay, Live TV, admin dashboard, user management, Quick Connect,
-  or LAN discovery. `/web` is forwarded to the primary upstream's web client,
-  which may not work fully against the proxy.
+  or LAN discovery. `/web` is forwarded to the primary upstream's web client;
+  its index and bundles load through the proxy, but using it interactively
+  has not been tested.
 * **Transcoding** happens on the owning upstream with its settings; the proxy
   does not transcode.
 * `server_name` override verifies the upstream cert against that name but the
@@ -461,5 +497,6 @@ handlers), `src/proxy.rs` (shared handler logic, fan-out, relay),
   layer).
 * The settings listed at the end of [Hot reload](#hot-reload) need a restart;
   adding, removing and re-pointing `[[server]]`s does not.
-* The Docker image build has not been run in this environment (no Docker
-  daemon was available); the Dockerfile is untested.
+* The image has been built and run with podman 5.4 (including as uid
+  99:100), not with Docker Engine, and the Unraid template has not been
+  installed on a real Unraid host.
