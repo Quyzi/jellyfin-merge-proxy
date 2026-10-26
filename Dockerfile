@@ -20,13 +20,14 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
 FROM cgr.dev/chainguard/glibc-dynamic:latest
 COPY --from=build /jellyfin-merge-proxy /usr/local/bin/jellyfin-merge-proxy
 COPY config.example.toml /usr/share/jellyfin-merge-proxy/config.example.toml
-ENV JMP_CONFIG=/config/config.toml
-# Runs as any uid (e.g. `--user 99:100` on Unraid); it only writes under
-# /config. On first start without /config/config.toml it writes
-# /config/config.example.toml (if /config is writable) and exits with
-# instructions. Plain HTTP by default: certificates are optional and only
-# needed if config.toml enables [tls] or a [server.tls] ca_path/client cert.
-VOLUME ["/config"]
+ENV JMP_CONFIG=/etc/jmp.toml
+# Runs as any uid (e.g. `--user 99:100` on Unraid); writes to /var/lib/jmp for
+# data (ids.tsv, sessions.json, catalog cache, auto-generated secret.key) and
+# /etc (config file bind-mount). First start without /etc/jmp.toml writes
+# jmp.example.toml next to it (if writable) and exits with instructions. Plain HTTP by
+# default: certificates optional, only needed if config enables [tls] or [server.tls].
+RUN mkdir -p /var/lib/jmp && chmod 777 /var/lib/jmp
+VOLUME ["/var/lib/jmp"]
 EXPOSE 8096
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/jellyfin-merge-proxy"]
