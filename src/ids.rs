@@ -120,6 +120,12 @@ pub fn synthetic_id(parts: &[&str]) -> ProxyItemId {
     ProxyItemId::parse(&hash_id(parts)).expect("hash_id yields 32 hex chars")
 }
 
+/// Proxy id of `id` on the server called `server_name`
+/// (`sha256("jmp1:" + lowercase name + ":" + id)[..16]`).
+pub fn item_proxy_id(server_name: &str, id: &UpstreamItemId) -> ProxyItemId {
+    synthetic_id(&[&server_name.to_ascii_lowercase(), id.as_str()])
+}
+
 /// Default [`IdMapper`]: deterministic hash ids plus a lookup table,
 /// optionally persisted to `ids.tsv`.
 ///
@@ -217,8 +223,7 @@ impl HashedIdTable {
     }
 
     fn compute(&self, upstream: ServerId, id: &UpstreamItemId) -> ProxyItemId {
-        let name = self.servers.name(upstream).unwrap_or_default();
-        synthetic_id(&[&name.to_ascii_lowercase(), id.as_str()])
+        item_proxy_id(&self.servers.name(upstream).unwrap_or_default(), id)
     }
 }
 
