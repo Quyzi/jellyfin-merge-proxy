@@ -105,49 +105,38 @@ stop-on-upgrade = false
 # RPM package metadata
 [package.metadata.generate-rpm]
 auto-req = "no"
-post_install_script = """
-# Create jmp system user if it doesn't exist
-if ! id jmp >/dev/null 2>&1; then
-    useradd --system --home-dir /var/lib/jmp --no-create-home \
+# The user must exist before the files are unpacked, so that /etc/jmp.toml
+# gets jmp:jmp from the package itself (no "user jmp does not exist" warning,
+# and `rpm -V` stays clean).
+pre_install_script = """
+if ! getent passwd jmp >/dev/null 2>&1; then
+    useradd --system --user-group --home-dir /var/lib/jmp --no-create-home \
             --shell /usr/sbin/nologin --comment "Jellyfin Merge Proxy" jmp
 fi
-
-# Ensure data directory exists with correct ownership
+"""
+post_install_script = """
 mkdir -p /var/lib/jmp
 chown jmp:jmp /var/lib/jmp
 chmod 700 /var/lib/jmp
-
-# Ensure config file is writable by jmp user (for secret rewriting)
-# Set to jmp:jmp with 640 so jmp can write, root can read
-if [ -f /etc/jmp.toml ]; then
-    chown jmp:jmp /etc/jmp.toml
-    chmod 640 /etc/jmp.toml
-fi
-
-# Reload systemd
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
 fi
 """
+# $1 is the number of installed instances left: 0 = erase, >= 1 = upgrade.
 pre_uninstall_script = """
-# Stop and disable service
-if [ -d /run/systemd/system ]; then
-    systemctl stop jellyfin-merge-proxy.service || true
-    systemctl disable jellyfin-merge-proxy.service || true
+if [ "$1" = 0 ] && [ -d /run/systemd/system ]; then
+    systemctl disable --now jellyfin-merge-proxy.service || true
 fi
 """
+# On upgrade restart a running service with the new binary. On erase keep the
+# jmp user and /var/lib/jmp: it holds secret.key, without which the enc:v1:
+# values in the (kept) config cannot be decrypted.
 post_uninstall_script = """
-# Reload systemd
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
-fi
-
-# On complete removal (not upgrade), remove user and data
-if [ "$1" = "0" ]; then
-    if id jmp >/dev/null 2>&1; then
-        userdel jmp || true
+    if [ "$1" -ge 1 ]; then
+        systemctl try-restart jellyfin-merge-proxy.service || true
     fi
-    rm -rf /var/lib/jmp || true
 fi
 """
 assets = [
