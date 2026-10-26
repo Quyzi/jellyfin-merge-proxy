@@ -293,6 +293,7 @@ Sections:
 | `[cache]` | `enabled`, `ttl_secs`, `refresh_interval_secs`, `max_entries`, `serve_stale_on_error`, `persist_path` |
 | `[tls]` | `cert_path`, `key_path`, `min_version`, `client_auth`, `client_ca_path`, `http2`, `redirect_http_listen` |
 | `[upstream_tls]` | defaults for all upstreams: `ca_path`, `insecure_skip_verify`, `client_cert_path`, `client_key_path`, `min_version`, `server_name` |
+| `[database]` | `path` (default `<data_dir>/jmp.db`), `journal_mode` (`wal` default\|`delete`\|`truncate`\|`persist`\|`memory`\|`off`), `synchronous` (`normal` default\|`off`\|`full`\|`extra`), `busy_timeout_ms` (default 5000) |
 | `[logging]` | `filter`, `format` (`pretty`\|`compact`\|`json`), `ansi` |
 | `[metrics]` | `enabled`, `path`, `listen`, `require_auth`, `process_metrics` |
 | `[debug]` | `enabled` (default false), `path`, `users` |

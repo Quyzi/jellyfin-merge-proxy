@@ -109,6 +109,9 @@ impl Reloadable for RestartNotices {
         if o.cache.enabled != n.cache.enabled || o.cache.persist_path != n.cache.persist_path {
             tracing::warn!("cache.enabled / cache.persist_path changes need a restart");
         }
+        if o.database != n.database {
+            tracing::warn!("[database] changes need a restart");
+        }
         if o.proxy.data_dir != n.proxy.data_dir {
             tracing::warn!("proxy.data_dir changes need a restart");
         }
