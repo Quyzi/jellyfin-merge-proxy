@@ -31,6 +31,7 @@ pub mod secrets;
 pub mod server;
 pub mod servers;
 pub mod siblings;
+pub mod store;
 pub mod telemetry;
 pub mod tls;
 pub mod types;
