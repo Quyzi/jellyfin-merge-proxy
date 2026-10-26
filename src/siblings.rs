@@ -6,8 +6,8 @@
 //! fanned out to every sibling and merged (seasons by number, episodes by
 //! season + episode number), so a show split across servers browses as one.
 //!
-//! Groups are persisted to `<data_dir>/siblings.tsv` (one `id\tid` pair per
-//! line) so that ids held by clients keep their merged view across restarts.
+//! Links are saved to the state store ([`crate::store::SiblingStore`]) so
+//! that ids held by clients keep their merged view across restarts.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};

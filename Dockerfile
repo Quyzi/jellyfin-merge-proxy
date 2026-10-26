@@ -24,7 +24,7 @@ COPY config.example.toml /usr/share/jellyfin-merge-proxy/config.example.toml
 COPY --from=build --chown=65532:65532 --chmod=700 /jmpdata /var/lib/jmp
 ENV JMP_CONFIG=/etc/jmp.toml
 # Runs as any uid (e.g. `--user 99:100` on Unraid); writes to /var/lib/jmp for
-# data (ids.tsv, sessions.json, catalog cache, auto-generated secret.key) and
+# data (jmp.db state database, catalog cache, auto-generated secret.key) and
 # /etc (config file bind-mount). First start without /etc/jmp.toml writes
 # jmp.example.toml next to it (if writable) and exits with instructions. Plain HTTP by
 # default: certificates optional, only needed if config enables [tls] or [server.tls].
