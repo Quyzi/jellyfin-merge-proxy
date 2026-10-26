@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: jellyfin-merge-proxy [--config PATH] [--version]
+const USAGE: &str = "usage: jellyfin-merge-proxy [--config PATH] [--metrics-md] [--version]
 
   -c, --config PATH   config file (default: $JMP_CONFIG or /config/config.toml)
+      --metrics-md    print the METRICS.md metric reference and exit
   -V, --version       print version";
 
 fn main() -> anyhow::Result<()> {
@@ -21,6 +22,10 @@ fn main() -> anyhow::Result<()> {
                     env!("CARGO_PKG_VERSION"),
                     jmp::telemetry::git_sha()
                 );
+                return Ok(());
+            }
+            "--metrics-md" => {
+                print!("{}", jmp::telemetry::metrics_markdown());
                 return Ok(());
             }
             other if !other.starts_with('-') && path.is_none() => path = Some(PathBuf::from(other)),

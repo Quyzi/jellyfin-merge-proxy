@@ -1,0 +1,21 @@
+# Example Prometheus config for jellyfin-merge-proxy (see docker-compose.yml).
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: jellyfin-merge-proxy
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["jellyfin-merge-proxy:8096"]   # or :9090 when [metrics].listen is set
+    # If [metrics].require_auth = true, send a proxy token: the AccessToken from
+    # a POST /Users/AuthenticateByName response (tokens are never logged or shown
+    # by the debug endpoint).
+    # authorization:
+    #   type: MediaBrowser
+    #   credentials: 'Token="<proxy token>"'
+    # Alternatively:
+    # params:
+    #   api_key: ["<proxy token>"]
+    # When [tls] is enabled on the main port:
+    # scheme: https
+    # tls_config:
+    #   ca_file: /etc/prometheus/proxy-ca.pem
