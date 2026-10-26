@@ -1,0 +1,27 @@
+# Minimal jellyfin-merge-proxy configuration - for package installation.
+# This file is intentionally empty to prevent insecure defaults.
+#
+# Configuration is REQUIRED before the proxy can start.
+# See the full example at /usr/share/doc/jellyfin-merge-proxy/config.example.toml
+# or online at https://github.com/Quyzi/jellyfin-merge-proxy
+#
+# Minimum required sections:
+#   [proxy]           - proxy settings (name, listen address, data_dir)
+#   [[user]]          - at least one proxy user account
+#   [[server]]        - at least one upstream Jellyfin server
+
+# Uncomment and configure the following sections:
+
+# [proxy]
+# listen = "0.0.0.0:8096"
+# name = "Jellyfin Merge Proxy"
+# data_dir = "/var/lib/jmp"
+
+# [[user]]
+# name = "family"
+# password = "your-secure-password-here"
+
+# [[server]]
+# name = "Main"
+# server = "http://192.168.1.100:8096"
+# password = "your-jellyfin-admin-password-or-api-key"
