@@ -5,6 +5,7 @@
 
 use crate::auth::{self, Session};
 use crate::backend::{BackendRequest, BackendResponse, MediaBackend, SessionInfo};
+use crate::cache::{CacheKey, Lookup};
 use crate::dto;
 use crate::error::BackendError;
 use crate::ids::{hash_id, looks_like_id, normalize_hex_id, synthetic_id, MergedView, Target};
@@ -127,6 +128,13 @@ async fn debug_handler(State(st): State<Shared>, req: Request) -> Response {
         .into_iter()
         .filter(|n| set.by_name(n).is_none())
         .collect();
+    let settings = st.catalog.settings();
+    let catalog = json!({
+        "impl": st.catalog.name(),
+        "entries": st.catalog.len(),
+        "ttl_secs": settings.ttl.as_secs(),
+        "max_entries": settings.max_entries,
+    });
     ok_json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "git_sha": telemetry::git_sha(),
@@ -144,6 +152,7 @@ async fn debug_handler(State(st): State<Shared>, req: Request) -> Response {
             "per_server": st.ids.sizes().into_iter().map(|(n, c)| json!({"server": n, "entries": c})).collect::<Vec<_>>(),
         },
         "caches": {
+            "catalog": catalog,
             "display_prefs_entries": st.display_prefs.lock().unwrap().len(),
             "password_hashes": st.password_cache().len(),
         },
@@ -497,19 +506,52 @@ async fn fetch_views(up: &dyn MediaBackend) -> Result<Vec<Value>, String> {
     }
 }
 
-/// Per-backend views, fetched from every backend in parallel.
-async fn raw_views(st: &Shared, _force: bool) -> Vec<(ServerId, Vec<Value>)> {
+/// Per-backend views through the catalog cache: fresh entries are used
+/// as-is; otherwise the backend is asked, falling back to a stale entry
+/// (`cache.serve_stale_on_error`) when it fails.
+async fn raw_views(st: &Shared, force: bool) -> Vec<(ServerId, Vec<Value>)> {
+    let _g = st.views_refresh.lock().await;
+    let settings = st.catalog.settings();
     let set = st.backends();
-    let futs = set.iter().map(|up| async move {
-        match fetch_views(up.as_ref()).await {
-            Ok(items) => Some((up.id(), items)),
-            Err(e) => {
-                tracing::warn!(upstream = %up.name(), "views: {e}");
-                None
+    let futs = set.iter().map(|up| {
+        let st = st.clone();
+        async move {
+            let key = CacheKey::new("views", up.name());
+            let stale = match st.catalog.get(&key) {
+                Lookup::Fresh(v) if !force => return items_of(up.id(), v),
+                Lookup::Fresh(v) | Lookup::Stale(v) => Some(v),
+                Lookup::Miss => None,
+            };
+            match fetch_views(up.as_ref()).await {
+                Ok(items) => {
+                    st.catalog.put(key, Value::Array(items.clone()));
+                    Some((up.id(), items))
+                }
+                Err(e) => {
+                    tracing::warn!(upstream = %up.name(), "views: {e}");
+                    counter!(names::CACHE_REFRESH_FAILURES, "cache" => "views", "server" => up.name().to_string()).increment(1);
+                    if settings.serve_stale_on_error {
+                        stale.and_then(|v| items_of(up.id(), v))
+                    } else {
+                        None
+                    }
+                }
             }
         }
     });
     join_all(futs).await.into_iter().flatten().collect()
+}
+
+fn items_of(id: ServerId, v: Value) -> Option<(ServerId, Vec<Value>)> {
+    match v {
+        Value::Array(a) => Some((id, a)),
+        _ => None,
+    }
+}
+
+/// Refresh every backend's catalog entry now (background refresher).
+pub async fn refresh_catalog(st: &Shared) {
+    raw_views(st, true).await;
 }
 
 /// Build the merged, client-facing list of library views.
