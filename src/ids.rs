@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 
 use crate::servers::ServerRegistry;
+use crate::store::{IdRow, IdStore, StoreError};
 use crate::telemetry::names;
 pub use crate::types::normalize_hex_id;
 use crate::types::{ProxyItemId, ServerId, UpstreamItemId};
@@ -136,19 +137,26 @@ pub fn item_proxy_id(server_name: &str, id: &UpstreamItemId) -> ProxyItemId {
 pub struct HashedIdTable {
     servers: Arc<ServerRegistry>,
     table: RwLock<HashMap<ProxyItemId, Target>>,
-    persist: Option<std::sync::Mutex<mpsc::Sender<String>>>,
+    writer: Option<Writer>,
     per_server: RwLock<HashMap<ServerId, AtomicU64>>,
 }
 
 /// Backwards-compatible name.
 pub type IdMap = HashedIdTable;
 
+/// Background writer: new mappings go through a channel to a thread that
+/// saves them in batches.
+struct Writer {
+    tx: std::sync::Mutex<mpsc::Sender<IdRow>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
 impl HashedIdTable {
     pub fn new(servers: Arc<ServerRegistry>) -> Self {
         HashedIdTable {
             servers,
             table: RwLock::new(HashMap::new()),
-            persist: None,
+            writer: None,
             per_server: RwLock::new(HashMap::new()),
         }
     }
@@ -203,27 +211,92 @@ impl HashedIdTable {
             .create(true)
             .append(true)
             .open(&path)?;
-        let (tx, rx) = mpsc::channel::<String>();
-        std::thread::Builder::new()
+        let (tx, rx) = mpsc::channel::<IdRow>();
+        let handle = std::thread::Builder::new()
             .name("id-persist".into())
             .spawn(move || {
                 let mut w = std::io::BufWriter::new(file);
-                while let Ok(line) = rx.recv() {
-                    let mut ok = w.write_all(line.as_bytes()).is_ok();
+                while let Ok(r) = rx.recv() {
+                    let tsv = |r: IdRow| format!("{}\t{}\n", r.server, r.upstream_id);
+                    let mut ok = w.write_all(tsv(r).as_bytes()).is_ok();
                     while let Ok(more) = rx.try_recv() {
-                        ok &= w.write_all(more.as_bytes()).is_ok();
+                        ok &= w.write_all(tsv(more).as_bytes()).is_ok();
                     }
                     ok &= w.flush().is_ok();
                     let outcome = if ok { "success" } else { "error" };
                     counter!(names::PERSIST_OPS, "store" => "ids", "op" => "save", "outcome" => outcome).increment(1);
                 }
             })?;
-        self.persist = Some(std::sync::Mutex::new(tx));
+        self.writer = Some(Writer {
+            tx: std::sync::Mutex::new(tx),
+            handle: Some(handle),
+        });
+        Ok(self)
+    }
+
+    /// Load every mapping from `store` and write new ones through to it.
+    /// Writes are batched on a background thread, so [`IdMapper::encode`]
+    /// never waits for the disk; dropping the table flushes them.
+    pub fn with_store(mut self, store: Arc<dyn IdStore>) -> Result<Self, StoreError> {
+        let rows = store.load_ids()?;
+        let loaded = rows.len();
+        {
+            let mut table = self.table.write().unwrap();
+            for r in rows {
+                // Servers no longer configured are registered too, so
+                // their old ids answer 410 Gone (or work again if re-added).
+                let idx = self.servers.id_for(&r.server);
+                let target = Target::Item {
+                    upstream: idx,
+                    id: r.upstream_id,
+                };
+                if table.insert(r.proxy_id, target).is_none() {
+                    self.bump(idx);
+                }
+            }
+        }
+        tracing::info!("loaded {loaded} id mappings from the state store");
+        counter!(names::PERSIST_OPS, "store" => "ids", "op" => "load", "outcome" => "success")
+            .increment(1);
+        let (tx, rx) = mpsc::channel::<IdRow>();
+        let handle = std::thread::Builder::new()
+            .name("id-persist".into())
+            .spawn(move || {
+                while let Ok(first) = rx.recv() {
+                    let mut batch = vec![first];
+                    batch.extend(rx.try_iter());
+                    let outcome = match store.append_ids(&batch) {
+                        Ok(()) => "success",
+                        Err(e) => {
+                            tracing::warn!("saving {} id mappings failed: {e}", batch.len());
+                            "error"
+                        }
+                    };
+                    counter!(names::PERSIST_OPS, "store" => "ids", "op" => "save", "outcome" => outcome).increment(1);
+                }
+            })
+            .map_err(|e| StoreError::Invalid(format!("starting the id writer: {e}")))?;
+        self.writer = Some(Writer {
+            tx: std::sync::Mutex::new(tx),
+            handle: Some(handle),
+        });
         Ok(self)
     }
 
     fn compute(&self, upstream: ServerId, id: &UpstreamItemId) -> ProxyItemId {
         item_proxy_id(&self.servers.name(upstream).unwrap_or_default(), id)
+    }
+}
+
+impl Drop for HashedIdTable {
+    /// Wait for queued mappings to be saved.
+    fn drop(&mut self) {
+        if let Some(mut w) = self.writer.take() {
+            drop(w.tx);
+            if let Some(h) = w.handle.take() {
+                let _ = h.join();
+            }
+        }
     }
 }
 
@@ -252,8 +325,12 @@ impl IdMapper for HashedIdTable {
         );
         drop(t);
         self.bump(server);
-        if let (Some(p), Some(name)) = (&self.persist, self.servers.name(server)) {
-            let _ = p.lock().unwrap().send(format!("{name}\t{id}\n"));
+        if let (Some(w), Some(name)) = (&self.writer, self.servers.name(server)) {
+            let _ = w.tx.lock().unwrap().send(IdRow {
+                proxy_id: pid.clone(),
+                server: name,
+                upstream_id: id.clone(),
+            });
         }
         Encoded { id: pid, new: true }
     }
