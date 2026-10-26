@@ -282,7 +282,7 @@ require_auth = false       # true: requires a proxy token (any accepted token fo
 process_metrics = true
 ```
 
-The full list (≈60 metrics) is in **[METRICS.md](METRICS.md)**, generated from
+The full list (≈90 metrics) is in **[METRICS.md](METRICS.md)**, generated from
 the single source of truth in `src/telemetry.rs` (`telemetry::names` +
 `telemetry::METRICS`) with `jellyfin-merge-proxy --metrics-md > METRICS.md`;
 a unit test fails if the file is out of date. Families:
@@ -311,9 +311,37 @@ Labels are bounded: routes are templated (`/items/{id}/images/{x}`, unknown
 paths → `/other`), servers are config names, ids and tokens never appear in
 labels.
 
-`deploy/prometheus.yml` is a scrape example and
-`deploy/grafana-dashboard.json` an optional Grafana dashboard (import it and
-pick your Prometheus datasource).
+### Observability Stack
+
+![Jellyfin Merge Proxy Grafana dashboard: overview](docs/images/dashboard/01-overview.png)
+
+More screenshots of every row are in [docs/dashboard.md](docs/dashboard.md).
+
+`docker-compose.yml` also starts Prometheus and Grafana, provisioned with the
+dashboard and alert rules:
+
+```sh
+cp .env.example .env     # set GRAFANA_ADMIN_PASSWORD
+docker compose up -d     # proxy :8096, Prometheus :9090, Grafana :3000
+```
+
+Grafana logs in with `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` from `.env`
+(default `admin` / `changeme`) and opens the **Jellyfin Merge Proxy** dashboard
+(`deploy/grafana-dashboard.json`, also importable into an existing Grafana). It
+has 55 panels in 10 rows (overview stats with sparklines, upstream health state
+timeline, latency heatmaps, per-upstream bar gauges and summary tables, stacked
+pipeline stages, streaming, merge/dedupe, cache, auth, config/TLS with a
+certificate expiry table, process) and `datasource`, `instance` and `server`
+variables. Config reloads and TLS reloads are annotated.
+
+The dashboard JSON is generated from `xtask/src/dashboard.rs` by
+`cargo xtask dashboard`, and `cargo test` fails if it is stale or references a
+metric or label the proxy does not export. See `DASHBOARD_TESTING.md`.
+
+Prometheus alerting rules in **`deploy/prometheus/alerts.yml`** cover: proxy not
+scraped, upstream down, no healthy upstreams, 5xx ratio > 5 %, upstream p95 > 5 s,
+TLS certificates expiring (< 14 days warning, < 7 days critical), failed config
+reloads, a high stream disconnect ratio and a low cache hit ratio.
 
 ## Debug endpoint
 
@@ -376,6 +404,7 @@ path/enabled, `[cache] enabled`/`persist_path`, `[logging] format`/`ansi`.
 
 Metrics: `jmp_config_upstream_changes_total{change="added|removed|rebuilt|changed"}`,
 `jmp_servers_active`, `jmp_servers_draining`,
+`jmp_upstream_configured` (1 while a `[[server]]` is enabled, 0 once removed or disabled),
 `jmp_servers_retired_total{outcome="drained|timeout"}`,
 `jmp_server_drain_duration_seconds`, `jmp_removed_server_requests_total`.
 
