@@ -4,8 +4,8 @@
 //! a proxy id is `sha256("jmp1:" + server_name + ":" + upstream_id)[..16]`
 //! rendered as 32 lowercase hex characters, so it looks exactly like a
 //! Jellyfin GUID. Because a hash cannot be inverted, every id handed to a
-//! client is recorded in an in-memory table which is also appended to
-//! `<data_dir>/ids.tsv`, so ids stay valid across proxy restarts.
+//! client is recorded in an in-memory table which is also saved to the
+//! state store ([`crate::store`]), so ids stay valid across proxy restarts.
 //! [`MeteredIdMapper`] adds the `jmp_ids_*` metrics to any mapper.
 
 use serde_json::Value;
@@ -126,7 +126,7 @@ pub fn item_proxy_id(server_name: &str, id: &UpstreamItemId) -> ProxyItemId {
 }
 
 /// Default [`IdMapper`]: deterministic hash ids plus a lookup table,
-/// optionally persisted to `ids.tsv`.
+/// optionally persisted to an [`IdStore`].
 ///
 /// Proxy ids hash the server *name* (not its URL), so moving a server to a
 /// new URL keeps every id valid. Entries for servers that were removed from
