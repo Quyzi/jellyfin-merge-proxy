@@ -1,0 +1,43 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove)
+        # Stop and disable service if running
+        if [ -d /run/systemd/system ]; then
+            systemctl stop jellyfin-merge-proxy.service || true
+            systemctl disable jellyfin-merge-proxy.service || true
+        fi
+        ;;
+
+    purge)
+        # Stop and disable service
+        if [ -d /run/systemd/system ]; then
+            systemctl stop jellyfin-merge-proxy.service || true
+            systemctl disable jellyfin-merge-proxy.service || true
+            systemctl daemon-reload || true
+        fi
+
+        # Remove user and data directory
+        if getent passwd jmp >/dev/null; then
+            userdel jmp || true
+        fi
+
+        if getent group jmp >/dev/null; then
+            groupdel jmp || true
+        fi
+
+        # Remove data directory on purge
+        rm -rf /var/lib/jmp || true
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0
