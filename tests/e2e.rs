@@ -566,13 +566,19 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
             .load(std::sync::atomic::Ordering::Relaxed),
         gen
     );
+    // Startup rewrote the plaintext secrets in the file.
+    assert!(
+        good.contains("$argon2id$") && good.contains("enc:v1:"),
+        "{good}"
+    );
+    assert!(
+        !good.contains("\"pw\"") && !good.contains("\"secret\""),
+        "{good}"
+    );
     // A valid change (new user) applies.
     std::fs::write(
         &env.config_path,
-        good.replace(
-            "password = \"pw\"\n",
-            "password = \"pw\"\n\n[[user]]\nname = \"guest\"\npassword = \"g\"\n",
-        ),
+        format!("{good}\n[[user]]\nname = \"guest\"\npassword = \"g\"\n"),
     )
     .unwrap();
     assert!(env.running.state.reload(false).await.unwrap());

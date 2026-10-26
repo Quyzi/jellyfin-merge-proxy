@@ -50,16 +50,21 @@ async fn run(path: PathBuf) -> anyhow::Result<()> {
         eprintln!("jellyfin-merge-proxy: {help}");
         std::process::exit(2);
     }
+
+    // Set up logging from the file's [logging] section before loading the
+    // config, so warnings emitted while loading (secret rewriting, key
+    // permissions) are visible. The subscriber can only be installed once.
+    let log = jmp::telemetry::init_logging(&jmp::config::LoggingConfig::peek(&path));
+
     let cache = jmp::config::PasswordCache::default();
     let cfg = match jmp::config::Config::load(&path, &cache) {
         Ok(c) => c,
         Err(e) => {
-            // Logging is not configured yet: print plainly.
-            eprintln!("error: config {}: {e:#}", path.display());
+            tracing::error!(config = %path.display(), "failed to load config: {e:#}");
             std::process::exit(2);
         }
     };
-    let log = jmp::telemetry::init_logging(&cfg.logging);
+
     tracing::info!(version = env!("CARGO_PKG_VERSION"), git_sha = jmp::telemetry::git_sha(), config = %path.display(), "starting");
     let running = jmp::server::start(
         cfg,

@@ -483,6 +483,26 @@ impl Default for LoggingConfig {
     }
 }
 
+impl LoggingConfig {
+    /// Best-effort read of just the `[logging]` table of the config file, so
+    /// logging can be set up before [`Config::load`] runs (which may log
+    /// warnings, e.g. while rewriting secrets). Falls back to defaults when
+    /// the file or the section cannot be parsed; `Config::load` reports the
+    /// real error afterwards.
+    pub fn peek(path: &Path) -> LoggingConfig {
+        #[derive(Deserialize)]
+        struct OnlyLogging {
+            #[serde(default)]
+            logging: LoggingConfig,
+        }
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| toml::from_str::<OnlyLogging>(&text).ok())
+            .map(|o| o.logging)
+            .unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MetricsConfig {
@@ -565,13 +585,14 @@ pub fn first_run_help(path: &Path) -> Option<String> {
              This happens when Docker bind-mounts a non-existent file - Docker creates a directory instead.\n\
              Fix:\n\
              1. Stop the container\n\
-             2. Delete the directory: rm -rf {}\n\
-             3. Create the config file on the host: touch {} && chmod 644 {}\n\
-             4. Edit the file with your [[user]] and [[server]] entries (see config.example.toml)\n\
-             5. Start the container again\n\
+             2. On the HOST, delete the directory that was created at the host bind-mount path\n\
+             3. On the HOST, create the config file: touch <host-path>/jmp.toml\n\
+             4. Make it writable by the container user (uid 65532, or 99:100 on Unraid with --user): chown 65532:65532 <host-path>/jmp.toml\n\
+             5. Edit the file with your [[user]] and [[server]] entries (see config.example.toml)\n\
+             6. Start the container again\n\
              \n\
              Alternatively, set JMP_CONFIG to point to a file inside a mounted directory volume instead of a single-file bind mount.",
-            path.display(), path.display(), path.display(), path.display()
+            path.display()
         ));
     }
 
@@ -650,17 +671,12 @@ impl Config {
         // Parse to get the data_dir (needed for key loading)
         let raw: RawConfig = match toml::from_str(&text) {
             Ok(r) => r,
-            Err(e) => {
+            Err(_) => {
+                // parse() reports the error (with the friendlier message for the
+                // pre-[[server]] layout); wipe the text only afterwards.
+                let r = Self::parse(&text, cache);
                 text.zeroize();
-                // Friendlier message for the pre-[[server]] layout.
-                if let Ok(v) = text.parse::<toml::Table>() {
-                    if v.get("server").map(|s| s.is_table()) == Some(true) {
-                        return Err(ConfigError::invalid(
-                            "`[server]` is now `[proxy]`; `[[server]]` (double brackets) lists the upstream Jellyfin servers",
-                        ));
-                    }
-                }
-                return Err(e.into());
+                return r;
             }
         };
 
@@ -876,6 +892,49 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&example).unwrap(), "# mine");
         std::fs::write(&cfg, "").unwrap();
         assert!(first_run_help(&cfg).is_none());
+    }
+
+    #[test]
+    fn logging_peek_reads_only_logging_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("jmp.toml");
+        std::fs::write(
+            &cfg,
+            "[proxy]\nunknown_key = 1\n\n[logging]\nfilter = \"debug\"\nformat = \"json\"\n",
+        )
+        .unwrap();
+        let l = LoggingConfig::peek(&cfg);
+        assert_eq!(l.filter, "debug");
+        assert_eq!(l.format, LogFormat::Json);
+        // Missing file or broken TOML: defaults, the real error comes from load().
+        assert_eq!(
+            LoggingConfig::peek(&dir.path().join("nope.toml")),
+            LoggingConfig::default()
+        );
+        std::fs::write(&cfg, "[logging\n").unwrap();
+        assert_eq!(LoggingConfig::peek(&cfg), LoggingConfig::default());
+    }
+
+    #[test]
+    fn load_keeps_friendly_message_for_old_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("jmp.toml");
+        std::fs::write(&cfg, "[server]\nlisten = \"0.0.0.0:8096\"\n").unwrap();
+        let err = Config::load(&cfg, &PasswordCache::default()).unwrap_err();
+        assert!(err.to_string().contains("is now `[proxy]`"), "{err}");
+    }
+    #[test]
+    fn first_run_detects_directory_instead_of_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_dir = dir.path().join("jmp.toml");
+        // Create a directory with the config name (simulates Docker bind mount issue)
+        std::fs::create_dir(&cfg_dir).unwrap();
+
+        let msg = first_run_help(&cfg_dir).unwrap();
+        assert!(msg.contains("is a directory, not a file"), "{msg}");
+        assert!(msg.contains("Docker bind-mounts"), "{msg}");
+        assert!(msg.contains("HOST"), "{msg}");
+        assert!(msg.contains("65532"), "{msg}");
     }
 
     #[test]
