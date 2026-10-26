@@ -64,6 +64,11 @@ x509-parser = "0.18"
 tempfile = "3"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 
+[build-dependencies]
+# For generating packages
+cargo-deb = { version = "2", optional = true }
+cargo-generate-rpm = { version = "0.15", optional = true }
+
 [profile.release]
 lto = "thin"
 codegen-units = 4
@@ -74,3 +79,81 @@ strip = true
 opt-level = 3
 [profile.dev.package.blake2]
 opt-level = 3
+
+# Debian package metadata
+[package.metadata.deb]
+maintainer = "Jellyfin Merge Proxy Contributors"
+copyright = "2024, Jellyfin Merge Proxy Contributors"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+HTTP proxy that merges several Jellyfin servers into one virtual Jellyfin server. \
+Supports hot-reloading, catalog caching, transparent id mapping, and more."""
+depends = "$auto, systemd"
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/jellyfin-merge-proxy", "/usr/bin/", "755"],
+    ["config.example.toml", "/etc/jmp.toml", "644"],
+    ["README.md", "/usr/share/doc/jellyfin-merge-proxy/README.md", "644"],
+    ["jellyfin-merge-proxy.service", "/usr/lib/systemd/system/jellyfin-merge-proxy.service", "644"],
+]
+conf-files = ["/etc/jmp.toml"]
+maintainer-scripts = "debian/"
+systemd-units = { enable = false }
+
+# RPM package metadata
+[package.metadata.generate-rpm]
+auto-req = "no"
+post_install_script = """
+# Create jmp system user if it doesn't exist
+if ! id jmp >/dev/null 2>&1; then
+    useradd --system --home-dir /var/lib/jmp --no-create-home \
+            --shell /usr/sbin/nologin --comment "Jellyfin Merge Proxy" jmp
+fi
+
+# Ensure data directory exists with correct ownership
+mkdir -p /var/lib/jmp
+chown jmp:jmp /var/lib/jmp
+chmod 700 /var/lib/jmp
+
+# Ensure config file is writable by jmp user (for secret rewriting)
+if [ -f /etc/jmp.toml ]; then
+    chown jmp:jmp /etc/jmp.toml
+    chmod 640 /etc/jmp.toml
+fi
+
+# Reload systemd
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+"""
+pre_uninstall_script = """
+# Stop and disable service
+if [ -d /run/systemd/system ]; then
+    systemctl stop jellyfin-merge-proxy.service || true
+    systemctl disable jellyfin-merge-proxy.service || true
+fi
+"""
+post_uninstall_script = """
+# Reload systemd
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+
+# On complete removal (not upgrade), remove user and data
+if [ "$1" = "0" ]; then
+    if id jmp >/dev/null 2>&1; then
+        userdel jmp || true
+    fi
+    rm -rf /var/lib/jmp || true
+fi
+"""
+assets = [
+    { source = "target/release/jellyfin-merge-proxy", dest = "/usr/bin/jellyfin-merge-proxy", mode = "755" },
+    { source = "config.example.toml", dest = "/etc/jmp.toml", mode = "644", config = "noreplace" },
+    { source = "README.md", dest = "/usr/share/doc/jellyfin-merge-proxy/README.md", mode = "644" },
+    { source = "jellyfin-merge-proxy.service", dest = "/usr/lib/systemd/system/jellyfin-merge-proxy.service", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+systemd = "*"
