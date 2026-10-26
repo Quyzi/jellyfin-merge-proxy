@@ -529,6 +529,62 @@ impl Default for DebugConfig {
 // Loading
 // ---------------------------------------------------------------------------
 
+/// The annotated example config shipped with the binary.
+pub const EXAMPLE: &str = include_str!("../config.example.toml");
+
+/// First run (no config file yet): put `config.example.toml` next to the
+/// missing `path` (only if it is not there already; `config.toml` itself is
+/// never written) and return instructions for the operator. `None` when the
+/// config exists.
+pub fn first_run_help(path: &Path) -> Option<String> {
+    if path.exists() {
+        return None;
+    }
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let example = dir.join("config.example.toml");
+    let wrote = if example.exists() {
+        Ok(false)
+    } else {
+        std::fs::create_dir_all(dir)
+            .and_then(|_| std::fs::write(&example, EXAMPLE))
+            .map(|_| true)
+    };
+    let mut msg = format!("no config file at {}.\n", path.display());
+    match wrote {
+        Ok(true) => msg += &format!("Wrote an annotated example to {}.\n", example.display()),
+        Ok(false) => msg += &format!("An annotated example is at {}.\n", example.display()),
+        Err(e) => {
+            msg += &format!(
+                "Could not write an example to {} ({e}). The directory must be writable by this \
+                 container's user (uid {}); e.g. on the host: chown -R <uid>:<gid> <config dir>.\n",
+                example.display(),
+                current_uid()
+            )
+        }
+    }
+    msg += &format!(
+        "Copy it to {} and edit it: [proxy], one [[user]] per person/TV and one [[server]] \
+         per Jellyfin server. Plain HTTP is the default; TLS is optional. Then restart.",
+        path.display()
+    );
+    Some(msg)
+}
+
+fn current_uid() -> String {
+    // /proc/self/status: "Uid:\t<real>\t<effective>..."; no libc call needed.
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("Uid:"))
+                .and_then(|l| l.split_whitespace().nth(1).map(str::to_string))
+        })
+        .unwrap_or_else(|| "?".into())
+}
+
 impl Config {
     pub fn load(path: &Path, cache: &PasswordCache) -> Result<Config, ConfigError> {
         let mut text = std::fs::read_to_string(path).map_err(|e| ConfigError::Io {
@@ -671,6 +727,24 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_run_writes_example_once_and_never_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("sub/config.toml");
+        let msg = first_run_help(&cfg).unwrap();
+        assert!(msg.contains("Wrote an annotated example"), "{msg}");
+        let example = dir.path().join("sub/config.example.toml");
+        assert_eq!(std::fs::read_to_string(&example).unwrap(), EXAMPLE);
+        assert!(!cfg.exists());
+        // Existing example is left alone.
+        std::fs::write(&example, "# mine").unwrap();
+        let msg = first_run_help(&cfg).unwrap();
+        assert!(msg.contains("An annotated example is at"), "{msg}");
+        assert_eq!(std::fs::read_to_string(&example).unwrap(), "# mine");
+        std::fs::write(&cfg, "").unwrap();
+        assert!(first_run_help(&cfg).is_none());
+    }
 
     #[test]
     fn parses_example() {
