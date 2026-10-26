@@ -4,7 +4,9 @@ const USAGE: &str = "usage: jellyfin-merge-proxy [--config PATH] [--metrics-md] 
 
   -c, --config PATH   config file (default: $JMP_CONFIG or /config/config.toml)
       --metrics-md    print the METRICS.md metric reference and exit
-  -V, --version       print version";
+  -V, --version       print version
+
+Logging: [logging] in the config; RUST_LOG overrides the filter.";
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
@@ -36,20 +38,54 @@ fn main() -> anyhow::Result<()> {
         .or_else(|| std::env::var_os("JMP_CONFIG").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("/config/config.toml"));
 
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(path))
+}
+
+async fn run(path: PathBuf) -> anyhow::Result<()> {
     let cache = jmp::config::PasswordCache::default();
-    match jmp::config::Config::load(&path, &cache) {
-        Ok(cfg) => {
-            println!(
-                "config {} OK: {} server(s), {} user(s)",
-                path.display(),
-                cfg.upstreams.len(),
-                cfg.users.len()
-            );
-            Ok(())
-        }
+    let cfg = match jmp::config::Config::load(&path, &cache) {
+        Ok(c) => c,
         Err(e) => {
+            // Logging is not configured yet: print plainly.
             eprintln!("error: config {}: {e:#}", path.display());
             std::process::exit(2);
         }
+    };
+    let _log = jmp::telemetry::init_logging(&cfg.logging);
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), git_sha = jmp::telemetry::git_sha(), config = %path.display(), "starting");
+    let running = jmp::server::start(
+        cfg,
+        jmp::server::Options {
+            password_cache: Some(cache),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    shutdown_signal().await;
+    running.shutdown();
+    running.wait().await
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            s.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = term => {},
     }
+    tracing::info!("shutting down");
 }
