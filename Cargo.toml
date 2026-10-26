@@ -1,0 +1,62 @@
+[package]
+name = "jellyfin-merge-proxy"
+version = "0.1.0"
+edition = "2021"
+description = "HTTP proxy that merges several Jellyfin servers into one virtual Jellyfin server"
+license = "MIT"
+
+[lib]
+name = "jmp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "jellyfin-merge-proxy"
+path = "src/main.rs"
+
+[dependencies]
+arc-swap = "1"
+anyhow = "1"
+async-trait = "0.1"
+thiserror = "2"
+argon2 = "0.5"
+axum = { version = "0.8", features = ["ws"] }
+bytes = "1"
+futures-util = "0.3"
+hex = "0.4"
+rand = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json", "http2", "charset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "ansi"] }
+url = "2"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+form_urlencoded = "1"
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
+rustls-pki-types = { version = "1", features = ["std"] }
+rustls-native-certs = "0.8"
+zeroize = "1"
+metrics-process = "2"
+x509-parser = "0.18"
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[dev-dependencies]
+tempfile = "3"
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true
+
+# argon2 is painfully slow unoptimised; keep debug builds/tests fast.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
