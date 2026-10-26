@@ -40,18 +40,18 @@ RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
-# Note: MemoryDenyWriteExecute disabled - rustls/argon2 may need it
-# MemoryDenyWriteExecute=true
+MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
-# Note: Allow @privileged for mlock (argon2) and clone (tokio)
-SystemCallFilter=~@resources
+SystemCallFilter=~@privileged
 PrivateDevices=true
 DevicePolicy=closed
 CapabilityBoundingSet=
 AmbientCapabilities=
 ProtectProc=invisible
 ProcSubset=pid
+UMask=0077
+RemoveIPC=true
 
 # Resource limits
 TasksMax=512
