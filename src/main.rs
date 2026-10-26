@@ -46,6 +46,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn run(path: PathBuf) -> anyhow::Result<()> {
+    if let Some(help) = jmp::config::first_run_help(&path) {
+        eprintln!("jellyfin-merge-proxy: {help}");
+        std::process::exit(2);
+    }
     let cache = jmp::config::PasswordCache::default();
     let cfg = match jmp::config::Config::load(&path, &cache) {
         Ok(c) => c,
