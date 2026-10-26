@@ -26,6 +26,7 @@ pub mod paths;
 pub mod proxy;
 pub mod reload;
 pub mod rewrite;
+pub mod secrets;
 pub mod server;
 pub mod servers;
 pub mod siblings;
