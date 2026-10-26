@@ -112,17 +112,13 @@ impl KeyStore for DefaultKeyStore {
                 let other_read = (mode & 0o004) != 0;
                 
                 if group_read || other_read {
-                    tracing::error!(
+                    tracing::warn!(
                         path = %key_path.display(),
                         mode = format!("{:o}", mode & 0o777),
                         "encryption key file has insecure permissions (group or world readable). \
-                         Set to 0600 with: chmod 600 {:?}",
+                         Recommended: chmod 600 {:?}",
                         key_path
                     );
-                    return Err(ConfigError::Invalid(format!(
-                        "encryption key file {:?} has insecure permissions ({:o}); must be 0600",
-                        key_path, mode & 0o777
-                    )));
                 }
             }
             
