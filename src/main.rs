@@ -51,12 +51,10 @@ async fn run(path: PathBuf) -> anyhow::Result<()> {
         std::process::exit(2);
     }
 
-    // Initialize logging early with defaults so Config::load warnings are visible
-    let _early_log = jmp::telemetry::init_logging(&jmp::config::LogConfig {
-        format: jmp::config::LogFormat::Text,
-        filter: "info".into(),
-        ansi: true,
-    });
+    // Set up logging from the file's [logging] section before loading the
+    // config, so warnings emitted while loading (secret rewriting, key
+    // permissions) are visible. The subscriber can only be installed once.
+    let log = jmp::telemetry::init_logging(&jmp::config::LoggingConfig::peek(&path));
 
     let cache = jmp::config::PasswordCache::default();
     let cfg = match jmp::config::Config::load(&path, &cache) {
@@ -67,8 +65,6 @@ async fn run(path: PathBuf) -> anyhow::Result<()> {
         }
     };
 
-    // Reinitialize logging with actual config
-    let log = jmp::telemetry::init_logging(&cfg.logging);
     tracing::info!(version = env!("CARGO_PKG_VERSION"), git_sha = jmp::telemetry::git_sha(), config = %path.display(), "starting");
     let running = jmp::server::start(
         cfg,
