@@ -282,7 +282,7 @@ require_auth = false       # true: requires a proxy token (any accepted token fo
 process_metrics = true
 ```
 
-The full list (≈60 metrics) is in **[METRICS.md](METRICS.md)**, generated from
+The full list (≈90 metrics) is in **[METRICS.md](METRICS.md)**, generated from
 the single source of truth in `src/telemetry.rs` (`telemetry::names` +
 `telemetry::METRICS`) with `jellyfin-merge-proxy --metrics-md > METRICS.md`;
 a unit test fails if the file is out of date. Families:
@@ -311,9 +311,59 @@ Labels are bounded: routes are templated (`/items/{id}/images/{x}`, unknown
 paths → `/other`), servers are config names, ids and tokens never appear in
 labels.
 
-`deploy/prometheus.yml` is a scrape example and
-`deploy/grafana-dashboard.json` an optional Grafana dashboard (import it and
-pick your Prometheus datasource).
+### Observability Stack
+
+Run Prometheus + Grafana with the proxy:
+
+```sh
+docker compose up -d
+```
+
+This starts:
+- **jellyfin-merge-proxy** on `:8096` (main proxy)
+- **Prometheus** on `:9090` (metrics scraping + alerting)
+- **Grafana** on `:3000` (visualization, default login: `admin`/`admin`)
+
+The Grafana dashboard at **`deploy/grafana-dashboard.json`** is automatically
+provisioned and includes:
+
+- **Overview row**: At-a-glance stats with sparklines and thresholds (requests/s,
+  error rate, p95 latency, servers up, active streams/sessions, cache hit ratio,
+  cert expiry, uptime).
+- **Traffic (RED)**: Requests, errors, and latency broken down by route and status.
+- **Upstream Servers**: Per-server health timeline, latency heatmap, error breakdown,
+  fan-out outcomes, re-auth, and token age.
+- **Request Pipeline**: Stacked per-stage timing (where time goes: auth, fanout,
+  merge, dedupe, serialize, etc.) and p95 durations.
+- **Streaming**: Active streams by kind and server, throughput, TTFB, stream endings
+  (complete/disconnect/error), HLS metrics, Range requests.
+- **Merge and Dedupe**: Items in vs out, duplicates dropped by key, dedupe winner
+  by server, ID table size.
+- **Catalog Cache**: Hit/miss/stale rates, hit ratio, entries, size, refresh
+  duration/failures.
+- **Auth and Sessions**: Logins by outcome, token validations, active sessions,
+  argon2 timing.
+- **Config and TLS**: Reload outcomes, config generation, upstream changes, cert
+  expiry table, TLS reloads.
+- **Process and Runtime**: CPU, memory, file descriptors, Tokio tasks and queue depth.
+
+Prometheus alerting rules in **`deploy/prometheus/alerts.yml`** cover:
+- Upstream server down
+- High error rate (> 5%)
+- TLS certificates expiring (< 14 days warning, < 7 days critical)
+- Config reload failures
+- High stream disconnect rate
+- Low cache hit ratio
+- High upstream latency
+- No healthy upstreams available
+
+Access Grafana at **http://localhost:3000**, log in with `admin`/`admin`, and
+the "Jellyfin Merge Proxy" dashboard is ready to use. Customize template variables
+(datasource, server, route, instance) to filter views.
+
+The dashboard uses modern Grafana 10/11 panel types, efficient `$__rate_interval`
+queries, meaningful color thresholds (green/yellow/red), descriptions on every panel,
+and annotations for config reloads and server state changes.
 
 ## Debug endpoint
 
