@@ -13,6 +13,7 @@
 
 use crate::error::ConfigError;
 use crate::secrets::KeyStore;
+use metrics::counter;
 use serde::Deserialize;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -658,12 +659,14 @@ impl Config {
                 }
                 Ok(false) => {}
                 Err(e) if is_permission_error(&e) => {
+                    counter!(crate::telemetry::names::SECRET_REWRITE_FAILURES).increment(1);
                     tracing::warn!(
                         path = %path.display(),
                         "config file not writable; secrets remain plaintext on disk: {e}"
                     );
                 }
                 Err(e) => {
+                    counter!(crate::telemetry::names::SECRET_REWRITE_FAILURES).increment(1);
                     text.zeroize();
                     return Err(e);
                 }
@@ -718,10 +721,18 @@ impl Config {
         if let Some(c) = cipher {
             for upstream in &mut upstreams {
                 if let Some(password) = &upstream.password {
-                    upstream.password = Some(password.decrypt(c)?);
+                    upstream.password = Some(password.decrypt(c).map_err(|e| {
+                        counter!(crate::telemetry::names::SECRET_DECRYPT_FAILURES, "kind" => "upstream_password").increment(1);
+                        tracing::error!(upstream = %upstream.name, "failed to decrypt upstream password: {e}");
+                        e
+                    })?);
                 }
                 if let Some(api_key) = &upstream.api_key {
-                    upstream.api_key = Some(api_key.decrypt(c)?);
+                    upstream.api_key = Some(api_key.decrypt(c).map_err(|e| {
+                        counter!(crate::telemetry::names::SECRET_DECRYPT_FAILURES, "kind" => "upstream_api_key").increment(1);
+                        tracing::error!(upstream = %upstream.name, "failed to decrypt upstream api_key: {e}");
+                        e
+                    })?);
                 }
             }
         }

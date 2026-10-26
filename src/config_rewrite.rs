@@ -6,8 +6,9 @@
 
 use crate::config::{PasswordCache, RawPassword, TaggedPassword};
 use crate::error::ConfigError;
-use crate::password::HashedPassword;
 use crate::secrets::SecretCipher;
+use crate::telemetry::names;
+use metrics::counter;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -43,6 +44,7 @@ pub fn rewrite_secrets(
                     if let Some(val) = password_item.as_value_mut() {
                         *val = Value::from(new_hash);
                         modified = true;
+                        counter!(names::SECRETS_REWRITTEN, "kind" => "user_password").increment(1);
                     }
                 }
             }
@@ -57,6 +59,7 @@ pub fn rewrite_secrets(
                     if let Some(val) = password_item.as_value_mut() {
                         *val = Value::from(encrypted);
                         modified = true;
+                        counter!(names::SECRETS_REWRITTEN, "kind" => "upstream_password").increment(1);
                     }
                 }
             }
@@ -65,6 +68,7 @@ pub fn rewrite_secrets(
                     if let Some(val) = api_key_item.as_value_mut() {
                         *val = Value::from(encrypted);
                         modified = true;
+                        counter!(names::SECRETS_REWRITTEN, "kind" => "upstream_api_key").increment(1);
                     }
                 }
             }
@@ -251,6 +255,7 @@ fn is_cross_device_or_busy(e: &ConfigError) -> bool {
 mod tests {
     use super::*;
     use crate::config::PasswordCache;
+    use crate::password::HashedPassword;
     use crate::secrets::{EncryptionKey, XChaCha20Cipher};
     use tempfile::tempdir;
 
