@@ -161,6 +161,18 @@ fn enabled(cfg: &Config) -> impl Iterator<Item = &UpstreamConfig> {
     cfg.upstreams.iter().filter(|u| u.enabled)
 }
 
+/// Exports `jmp_upstream_configured{server}`: 1 while the `[[server]]` is
+/// enabled in the applied config, 0 once it is removed or set `enabled = false`.
+/// Health dashboards and alerts join `jmp_upstream_up` with it, so a removed
+/// server's last `jmp_upstream_up` sample is not read as "down".
+pub fn set_configured(server: &str, configured: bool) {
+    gauge!(names::UPSTREAM_CONFIGURED, "server" => server.to_string()).set(if configured {
+        1.0
+    } else {
+        0.0
+    });
+}
+
 /// Keeps the live [`BackendSet`] in sync with `[[server]]` (see module docs).
 pub struct BackendManager {
     set: Arc<ArcSwap<BackendSet>>,
@@ -239,9 +251,6 @@ impl Reloadable for BackendManager {
         let mut changed = false;
         let mut first_err = None;
         for (u, step) in plan {
-            // Set configured=1 for all servers in the new config
-            gauge!(names::UPSTREAM_CONFIGURED, "server" => u.name.as_str()).set(1.0);
-            
             match step {
                 Step::Keep(b) => {
                     match b.apply(cx).await {
@@ -303,12 +312,16 @@ impl Reloadable for BackendManager {
                 counter!(names::CONFIG_UPSTREAM_CHANGES, "change" => "removed").increment(1);
                 tracing::info!(upstream = %old.name(), "[[server]] removed");
                 self.catalog.invalidate_server(old.name());
-                // Mark as not configured so it disappears from dashboards/alerts
-                gauge!(names::UPSTREAM_CONFIGURED, "server" => old.name().to_string()).set(0.0);
-                // Don't touch UPSTREAM_UP - let it stay at its last value (0 or 1)
-                // until the series naturally expires from Prometheus
+                // Its last `jmp_upstream_up` stays exported (the recorder cannot
+                // drop series); configured=0 tells dashboards and alerts to ignore it.
+                set_configured(old.name(), false);
                 retired.push(old.clone());
             }
+        }
+        // Every live backend (kept, added, rebuilt, or an old one kept after a
+        // failed rebuild) is configured; this also re-marks a re-added server.
+        for b in &list {
+            set_configured(b.name(), true);
         }
         if changed {
             // Atomic swap: requests that already loaded `cur` finish on it.

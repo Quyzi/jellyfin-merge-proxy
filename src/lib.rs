@@ -136,6 +136,9 @@ impl AppState {
         let registry = Arc::new(ServerRegistry::new());
         let backends =
             backend::build_all(&cfg, &registry, factory.as_ref(), tls_provider.as_ref())?;
+        for b in &backends {
+            servers::set_configured(b.name(), true);
+        }
         let data_dir = cfg.proxy.data_dir.clone();
         let (table, sessions, siblings) = match std::fs::create_dir_all(&data_dir) {
             Ok(()) => (

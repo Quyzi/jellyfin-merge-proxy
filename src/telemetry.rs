@@ -159,7 +159,7 @@ pub const METRICS: &[MetricDef] = &[
     m!(UPSTREAM_ERRORS, Counter, "server, kind", "Upstream transport errors: connect, dns, tls, timeout, body, other."),
     m!(UPSTREAM_IN_FLIGHT, Gauge, "server", "Concurrent requests to each upstream (headers pending)."),
     m!(UPSTREAM_UP, Gauge, "server", "1 if the upstream is considered healthy, 0 while in back-off."),
-    m!(UPSTREAM_CONFIGURED, Gauge, "server", "1 if the upstream is currently configured, 0 if removed."),
+    m!(UPSTREAM_CONFIGURED, Gauge, "server", "1 while the [[server]] is enabled in the applied config, 0 after a reload removed or disabled it."),
     m!(UPSTREAM_RETRIES, Counter, "server, reason", "Upstream request retries (reason: unauthorized)."),
     m!(UPSTREAM_REAUTH, Counter, "server", "Re-authentications triggered by a 401."),
     m!(UPSTREAM_AUTH, Counter, "server, outcome", "Upstream logins: success, failure, unreachable."),
