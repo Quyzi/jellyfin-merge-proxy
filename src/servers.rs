@@ -3,8 +3,12 @@
 //! * [`ServerRegistry`]: append-only `name ⇄ ServerId` table. Ids are never
 //!   reused, so an id handed out for a server that was later removed still
 //!   resolves to *that* server instead of pointing at some other server.
+//! * [`BackendSet`]: the enabled backends in config order (index 0 is the
+//!   primary).
 
+use crate::backend::MediaBackend;
 use crate::types::ServerId;
+use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 
 /// Append-only `name ⇄ ServerId` table (names compared case-insensitively).
@@ -83,6 +87,44 @@ impl ServerRegistry {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
+
+/// The enabled backends, in config order (index 0 is the primary).
+#[derive(Default)]
+pub struct BackendSet {
+    list: Vec<Arc<dyn MediaBackend>>,
+}
+
+impl BackendSet {
+    pub fn new(list: Vec<Arc<dyn MediaBackend>>) -> Self {
+        BackendSet { list }
+    }
+    pub fn get(&self, id: ServerId) -> Option<&Arc<dyn MediaBackend>> {
+        self.list.iter().find(|b| b.id() == id)
+    }
+    pub fn by_name(&self, name: &str) -> Option<&Arc<dyn MediaBackend>> {
+        self.list
+            .iter()
+            .find(|b| b.name().eq_ignore_ascii_case(name))
+    }
+    pub fn names(&self) -> Vec<String> {
+        self.list.iter().map(|b| b.name().to_string()).collect()
+    }
+}
+
+impl Deref for BackendSet {
+    type Target = [Arc<dyn MediaBackend>];
+    fn deref(&self) -> &Self::Target {
+        &self.list
+    }
+}
+
+/// Whether a [`ServerId`] is currently served.
+pub enum ServerState {
+    Active(Arc<dyn MediaBackend>),
+    /// Known (ids were issued for it) but no longer in the config.
+    Removed(String),
+    Unknown,
 }
 
 #[cfg(test)]
