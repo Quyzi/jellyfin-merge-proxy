@@ -5,6 +5,7 @@
 //! Tokens are cached, refreshed once on a 401, and a server that fails to
 //! connect is marked down for a short back-off.
 
+use super::accounts::AccountPool;
 use super::credentials::{self, AuthChannel, UpstreamCredentials};
 use super::transport::{error_kind, HttpTransport, Instrumented, Transport};
 use super::{
@@ -68,6 +69,8 @@ pub struct JellyfinBackend {
     /// Set by `retire`: stragglers holding an old snapshot get `Down`
     /// instead of logging in again.
     retired: std::sync::atomic::AtomicBool,
+    /// Per-user accounts on this server (`[[user.account]]`).
+    accounts: AccountPool,
 }
 
 impl std::fmt::Debug for JellyfinBackend {
@@ -136,6 +139,7 @@ impl JellyfinBackend {
         record_client_cert_expiry(&cfg.name, &tls, provider);
         let device_id = crate::ids::hash_id(&["device", &cfg.name.to_ascii_lowercase()]);
         gauge!(names::UPSTREAM_UP, "server" => cfg.name.clone()).set(1.0);
+        let accounts = AccountPool::from_config(&cfg.name, global);
         Ok(JellyfinBackend {
             id,
             name: cfg.name.clone(),
@@ -152,6 +156,7 @@ impl JellyfinBackend {
             device_id,
             in_flight: InFlight::default(),
             retired: std::sync::atomic::AtomicBool::new(false),
+            accounts,
         })
     }
 
@@ -257,6 +262,39 @@ impl JellyfinBackend {
         counter!(names::UPSTREAM_AUTH, "server" => self.name.clone(), "outcome" => outcome)
             .increment(1);
         r
+    }
+
+    /// End an upstream session (`POST Sessions/Logout`). Never for API
+    /// keys: logging out with one would revoke the key.
+    async fn logout(&self, token: &Secret) {
+        let r = self.build_request(
+            Method::POST,
+            "Sessions/Logout",
+            self.auth_headers(Some(token.expose())),
+            None,
+        );
+        match r {
+            Ok(r) => match self.raw_send(r, false).await {
+                Ok(resp) => {
+                    tracing::info!(upstream = %self.name, status = resp.status().as_u16(), "ended upstream session")
+                }
+                Err(e) => {
+                    tracing::debug!(upstream = %self.name, "logout failed: {}", e.without_url())
+                }
+            },
+            Err(e) => tracing::debug!(upstream = %self.name, "logout: {e}"),
+        }
+    }
+
+    /// Log out password sessions of per-user accounts that were removed,
+    /// changed, or are being retired.
+    async fn logout_accounts(&self, list: Vec<Arc<super::accounts::Account>>) {
+        for a in list {
+            let is_password = a.kind() == "password";
+            if let Some(l) = a.take().await.filter(|_| is_password) {
+                self.logout(&l.token).await;
+            }
+        }
     }
 
     async fn do_login(&self) -> Result<(), BackendError> {

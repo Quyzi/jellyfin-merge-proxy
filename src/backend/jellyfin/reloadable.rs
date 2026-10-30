@@ -28,6 +28,9 @@ impl Reloadable for JellyfinBackend {
         let Some(nc) = own_config(cx.new, &self.name) else {
             return Ok(false);
         };
+        let dropped = self.accounts.reload(&self.name, cx.new);
+        let accounts_changed = !dropped.is_empty() || cx.old.users != cx.new.users;
+        self.logout_accounts(dropped).await;
         let oc = own_config(cx.old, &self.name);
         let tls = UpstreamTlsConfig::merged(&cx.new.upstream_tls, nc.tls.as_ref());
         let timeout = timeout_of(cx.new);
@@ -35,7 +38,7 @@ impl Reloadable for JellyfinBackend {
         let tls_changed =
             tls != *self.tls.read().unwrap() || timeout != *self.timeout.read().unwrap();
         if oc == Some(nc) && !tls_changed && !cx.files_changed {
-            return Ok(false);
+            return Ok(accounts_changed);
         }
         if oc != Some(nc) {
             counter!(names::CONFIG_UPSTREAM_CHANGES, "change" => "changed").increment(1);
