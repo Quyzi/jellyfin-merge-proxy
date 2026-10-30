@@ -7,6 +7,7 @@
 //! reloads by [`PasswordCache`]) and zeroized.
 
 use crate::error::PasswordError;
+use argon2::password_hash::phc::PasswordHash as PhcHash;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
@@ -64,21 +65,18 @@ pub struct Argon2id;
 
 impl PasswordHasher for Argon2id {
     fn hash(&self, plain: &Password) -> Result<HashedPassword, PasswordError> {
-        use argon2::password_hash::{PasswordHasher as _, SaltString};
-        use rand::RngCore;
-        let mut salt = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut salt);
-        let salt = SaltString::encode_b64(&salt).map_err(|e| PasswordError::Hash(e.to_string()))?;
+        use argon2::password_hash::PasswordHasher as _;
+        // argon2 0.6 draws a 16-byte salt from the OS RNG (getrandom) itself;
+        // the PHC string layout is the same as with 0.5's `SaltString`.
         let h = argon2::Argon2::default()
-            .hash_password(plain.expose().as_bytes(), &salt)
+            .hash_password(plain.expose().as_bytes())
             .map_err(|e| PasswordError::Hash(e.to_string()))?
             .to_string();
         Ok(HashedPassword(h))
     }
 
     fn parse(&self, s: &str) -> Result<HashedPassword, PasswordError> {
-        argon2::password_hash::PasswordHash::new(s)
-            .map_err(|e| PasswordError::InvalidHash(e.to_string()))?;
+        PhcHash::new(s).map_err(|e| PasswordError::InvalidHash(e.to_string()))?;
         if !s.starts_with("$argon2") {
             return Err(PasswordError::NotArgon2);
         }
@@ -88,8 +86,8 @@ impl PasswordHasher for Argon2id {
 
 impl PasswordVerifier for Argon2id {
     fn verify(&self, hash: &HashedPassword, candidate: &Password) -> bool {
-        use argon2::password_hash::{PasswordHash, PasswordVerifier as _};
-        match PasswordHash::new(&hash.0) {
+        use argon2::password_hash::PasswordVerifier as _;
+        match PhcHash::new(&hash.0) {
             Ok(h) => argon2::Argon2::default()
                 .verify_password(candidate.expose().as_bytes(), &h)
                 .is_ok(),
