@@ -36,19 +36,53 @@ services:
       # Or e.g. certificates managed by certbot / Caddy on the host:
       # - /etc/letsencrypt/live/media.example.com:/config/certs/le:ro
 
-  # Optional Prometheus scraping /metrics. Uncomment together with the volume below.
-  # prometheus:
-  #   image: cgr.dev/chainguard/prometheus:latest
-  #   restart: unless-stopped
-  #   command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
-  #   ports:
-  #     - "9091:9090"
-  #   volumes:
-  #     - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-  #     - prometheus-data:/prometheus
+  # Optional Prometheus (scrapes /metrics, evaluates deploy/prometheus/alerts.yml)
+  # and Grafana (provisioned datasource + deploy/grafana-dashboard.json).
+  # Remove these two services if you already run your own and import the
+  # dashboard JSON there, or start only the proxy:
+  #   docker compose up -d jellyfin-merge-proxy
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: jmp-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - jellyfin-merge-proxy
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: jmp-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-changeme}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+    volumes:
+      - grafana-data:/var/lib/grafana
+      # Mount only the two provider subdirectories: mounting all of provisioning/
+      # hides the image's plugins/ and alerting/ dirs (errors at startup).
+      - ./deploy/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./deploy/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      # A single-file bind mount pins the file's inode: `cargo xtask dashboard`
+      # rewrites it in place (Grafana reloads it within 30 s), but a git checkout
+      # or an editor that replaces the file needs `docker compose restart grafana`.
+      - ./deploy/grafana-dashboard.json:/etc/grafana/dashboards/jellyfin-merge-proxy.json:ro
+    depends_on:
+      - prometheus
 
 volumes:
   jmp-data:
-
-# volumes:
-#   prometheus-data:
+  prometheus-data:
+  grafana-data:
