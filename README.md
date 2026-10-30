@@ -63,12 +63,29 @@ rustls (no OpenSSL), tracing, metrics + Prometheus exporter.
 * **Libraries.** Upstream views are grouped by (name, collection type) when
   `merge_libraries_by_name = true`; a merged view gets its own stable id and
   queries against it fan out to the member libraries.
-* **Lists.** `/Items`, `Latest`, `Resume`, `NextUp`, search hints, genres,
-  persons, ... fan out to all relevant upstreams with
-  `StartIndex=0&Limit=min(StartIndex+Limit, fanout_limit)`, then the proxy
-  merges, optionally de-duplicates (Tmdb/Imdb/Tvdb provider ids), sorts by the
-  requested `SortBy`/`SortOrder` and applies the client's paging.
-  Upstreams are always asked for `ProviderIds` when dedupe applies.
+* **Catalog index.** Every server's library is crawled (paged
+  `Items?Recursive=true`, only the fields the index needs) into
+  `data_dir/jmp.db` and merged into one catalog: copies of a movie or series
+  are grouped (with `dedupe`, by Tmdb/Imdb/Tvdb id, else name + year;
+  seasons and episodes of a grouped series by number), and genres, studios
+  and people are merged by name. Each group has one **canonical id** that is
+  chosen once and persisted, so it survives restarts and copies coming and
+  going; every id a client sees for that item is the canonical one, and it
+  resolves to the best live copy (`[index] prefer`). The index is re-crawled
+  every `[index] refresh_interval_secs` and is warm immediately after a
+  restart.
+* **Lists.** `/Items` (and `Users/{id}/Items`), `Shows/{id}/Seasons`,
+  `Shows/{id}/Episodes`, `Genres`, `Studios`, `Persons` and
+  `Items/Filters(2)` are answered from the index with Jellyfin's filter and
+  sort semantics: exact `TotalRecordCount`, exact paging at any depth, and
+  sorting by keys the DTOs do not carry (`DateCreated`, `OfficialRating` by
+  rating score, `CriticRating`, `Runtime`, ...; missing values sort first
+  ascending like Jellyfin). Only the requested page is fetched live from
+  the owning servers (in the client's `Fields`). A query using a parameter
+  the index does not know falls back to live fan-out, as do `Latest`,
+  `Resume`, `NextUp` and search hints: they go to all relevant upstreams
+  with `StartIndex=0&Limit=min(StartIndex+Limit, fanout_limit)`, then the
+  proxy merges, de-duplicates, sorts and pages.
 * **Shows split across servers.** With `dedupe`, a series on several servers
   is listed once, and its other copies are remembered as *siblings*
   (also in `data_dir/jmp.db`). Its seasons and episodes (`/Shows/{id}/Seasons`,
@@ -529,7 +546,9 @@ duplicate names, is rejected.
 Changes that still need a restart (logged as a warning): `[proxy] listen`,
 `data_dir`, `name`/`id` (the server id clients see), turning `[tls]` on/off or
 changing its redirect port, `[metrics]` listen/path/enabled, `[debug]`
-path/enabled, `[cache] enabled`/`persist_path`, `[logging] format`/`ansi`.
+path/enabled, `[cache] enabled`/`persist_path`, `[index] page_size`,
+`[logging] format`/`ansi`. The other `[index]` settings apply on reload
+(the snapshot is rebuilt within seconds).
 
 Metrics: `jmp_config_upstream_changes_total{change="added|removed|rebuilt|changed"}`,
 `jmp_servers_active`, `jmp_servers_draining`,
@@ -684,9 +703,12 @@ containers with generated H.264/AAC media (unique and duplicated titles, a
 show split across two servers, an HTTPS server with a private CA), and
 `scripts/real-jellyfin-test.sh` drives the proxy like a client through
 login, browsing, playback (direct stream with Range, HLS checked with
-ffprobe, subtitles), user data (verified on the owning upstream) and eleven
-config scenarios (merge/dedupe/priority, server down and back, API key
-upstream, HTTPS upstream, TLS listener, hot reload, cache, `unknown_routes`).
+ffprobe, subtitles), user data (verified on the owning upstream), the
+catalog index (exact totals and deep paging, every sort key compared with
+each upstream's own order, genre/person filters across servers, split shows,
+stable canonical ids across restarts) and eleven config scenarios
+(merge/dedupe/priority, server down and back, API key upstream, HTTPS
+upstream, TLS listener, hot reload, cache, `unknown_routes`).
 Set `JMP_IMAGE` to run the proxy from the container image instead of the
 binary. Details: [`scripts/real-jellyfin/README.md`](scripts/real-jellyfin/README.md).
 Bugs it found have regression tests in `tests/real_jellyfin_regressions.rs`.
@@ -700,23 +722,19 @@ Bugs it found have regression tests in `tests/real_jellyfin_regressions.rs`.
 * **Shared upstream identity.** All proxy users use the same upstream
   account per server, so watch state, favourites, resume points and parental
   controls are shared between proxy users.
-* **Per-upstream non-item ids.** Genres, persons, studios etc. are
-  per-upstream; the same genre on two servers appears twice in lists and
-  filtering by it only queries one server.
-* **Dedupe** applies only to fan-out lists, matches by Tmdb/Imdb/Tvdb (plus
-  name for genre/person-style lists), and makes `TotalRecordCount`/paging
-  approximate. Deep paging is bounded by `fanout_limit`.
+* **Per-user filters and sorts** (`IsPlayed`, `IsFavorite`, `Filters=IsResumable`,
+  `SortBy=DatePlayed`/`PlayCount`, ...) are not answered from the index yet;
+  they fall back to live fan-out with approximate totals/paging (bounded by
+  `fanout_limit`) and sorting from DTO JSON. `Latest`, `Resume`, `NextUp`
+  and search hints always fan out.
 * **Split shows:** watch state stays per server, so `NextUp` for a show
-  split across servers can list one next episode per server. A series that
-  never appeared in a merged list is looked up on the other servers (by
-  provider id and production year) the first time its seasons/episodes are
-  opened.
-* **Sorting** of merged lists is done in the proxy from the returned item
-  JSON (`SortName`, `PremiereDate`, `DateCreated`, `CommunityRating`,
-  `UserData` fields, ...). Items lacking the field sort last, and sort keys
-  whose value isn't in the DTO can order differently than Jellyfin would.
-* **Merged view ids** are derived deterministically but not stored; they are
-  rebuilt from upstream views on demand.
+  split across servers can list one next episode per server.
+* **Index freshness:** items added upstream appear after the next crawl
+  (`[index] refresh_interval_secs`, default 10 min); until then they are
+  only visible through fan-out endpoints. While a live server has never been
+  crawled (just added), library queries use live fan-out.
+* **`Years`, `MusicGenres`, `Artists`** and other name lists not listed
+  above are still per-upstream fan-out lists merged by name.
 * **WebSocket** only answers keep-alives; no remote control, no server-pushed
   library/playstate updates.
 * **No** SyncPlay, Live TV, admin dashboard, user management, Quick Connect,
