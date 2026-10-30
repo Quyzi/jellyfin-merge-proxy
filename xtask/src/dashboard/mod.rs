@@ -2,7 +2,8 @@
 //! deploy/grafana-dashboard.json by `cargo xtask dashboard`.
 //!
 //! Layout (top to bottom): health at a glance, client traffic (RED),
-//! upstream servers, request pipeline, streaming, merge/dedupe, catalog index, catalog cache,
+//! upstream servers, request pipeline, streaming, merge/dedupe, catalog index, per-user state,
+//! catalog cache,
 //! clients & auth, configuration & TLS, process. Rate panels use
 //! `$__rate_interval`; "(range)" panels summarise the selected time range.
 
@@ -14,12 +15,14 @@ mod index;
 mod overview;
 mod system;
 mod upstreams;
+mod userdata;
 
 use catalog::{auth, cache, merge};
 use index::index;
 use overview::{overview, traffic};
 use system::{config_tls, process};
 use upstreams::{pipeline, streaming, upstreams};
+use userdata::userdata;
 
 // Label filters shared by every query.
 const I: &str = r#"instance=~"$instance""#;
@@ -73,6 +76,7 @@ pub fn build() -> Value {
     streaming(&mut l);
     merge(&mut l);
     index(&mut l);
+    userdata(&mut l);
     cache(&mut l);
     auth(&mut l);
     config_tls(&mut l);
