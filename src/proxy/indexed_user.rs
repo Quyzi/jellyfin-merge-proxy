@@ -68,12 +68,14 @@ pub async fn indexed_nextup(st: &Shared, r: &Req, c: &Client) -> Option<Result<R
     let all = if nothing {
         vec![]
     } else {
-        next_up(
+        let mut all = next_up(
             &snap,
             &|s| is_live(st, s),
             &|i| st.userdata.fact(user, &snap, i),
             &nq,
-        )
+        );
+        st.parental.retain(user, &snap, &mut all);
+        all
     };
     let start: usize = q_get(q, "StartIndex")
         .and_then(|s| s.parse().ok())
