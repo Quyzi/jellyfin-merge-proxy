@@ -101,6 +101,20 @@ impl ParentalService {
         blocked
     }
 
+    /// Drop DTOs `user` may not see from a fan-out page (items are rewritten
+    /// one by one there, so the rewriter never sees the list); returns how
+    /// many were dropped.
+    pub fn retain_dtos(&self, user: &str, items: &mut Vec<serde_json::Value>) -> usize {
+        let Some((p, snap)) = self.current(user) else {
+            return 0;
+        };
+        let hidden = super::filter::retain_page(&p, snap.as_deref(), items);
+        if hidden > 0 {
+            counter!(names::PARENTAL_HIDDEN, "source" => "list").increment(hidden as u64);
+        }
+        hidden
+    }
+
     /// Drop items `user` may not see from index results (order kept).
     pub fn retain(&self, user: &str, snap: &Snapshot, hits: &mut Vec<usize>) {
         let Some(p) = self.policy(user, Some(snap)) else {
