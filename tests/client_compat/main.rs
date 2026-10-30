@@ -245,6 +245,25 @@ async fn genre_studio_person_dtos_and_filters_match_jellyfin() {
         .get(&t, "Items/Filters?Recursive=true&IncludeItemTypes=Movie")
         .await;
     assert_eq!(f["Years"], json!([2008, 2010, 2012]));
+    let y = env
+        .get(
+            &t,
+            "Years?SortBy=SortName&SortOrder=Descending&Recursive=true",
+        )
+        .await;
+    assert_eq!(
+        names(&y),
+        ["2012", "2010", "2008"],
+        "years from both servers, once each"
+    );
+    let c = env.get(&t, "Items/Counts").await;
+    let got: Vec<i64> = ["MovieCount", "SeriesCount", "EpisodeCount", "ItemCount"]
+        .iter()
+        .map(|k| c[*k].as_i64().unwrap())
+        .collect();
+    // 4 movies + 2 series copies + 3 episodes upstream; one movie and the
+    // series are the same title on both servers.
+    assert_eq!(got, [3, 1, 3, 15 - 2], "{c}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

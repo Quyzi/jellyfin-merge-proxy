@@ -109,6 +109,26 @@ pub fn install(m: &MockBackend, cfg: &UpstreamConfig) {
         .filter(|(l, _)| *l == "movies")
         .map(|(_, v)| v.clone())
         .collect();
+    let years: Vec<Value> = movies
+        .iter()
+        .map(|v| {
+            let y = v["ProductionYear"].to_string();
+            json!({"Name": y, "Id": id(&["year", &y]), "Type": "Year", "ImageTags": {}})
+        })
+        .collect();
+    m.on_json(
+        None,
+        "Years",
+        json!({"Items": years, "TotalRecordCount": years.len()}),
+    );
+    let eps = all.iter().filter(|(_, v)| v["Type"] == "Episode").count();
+    // Jellyfin's ItemCount also counts seasons and library folders.
+    m.on_json(
+        None,
+        "Items/Counts",
+        json!({"MovieCount": movies.len(), "SeriesCount": 1,
+        "EpisodeCount": eps, "ItemCount": movies.len() + 1 + 1 + eps + 2}),
+    );
     m.on_json(None, "Items/Latest", Value::Array(movies));
     let names = name_items(&n);
     m.on_query(None, "Items", move |qs| {

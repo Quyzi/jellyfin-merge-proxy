@@ -49,6 +49,7 @@ pub fn routes() -> Vec<Route> {
             .at("musicgenres")
             .at("studios")
             .at("persons")
+            .at("years")
             .at("artists")
             .at("artists/albumartists")
             .get(),
@@ -179,5 +180,7 @@ async fn filters(st: &Shared, r: Req, c: &Client) -> HandlerResult {
 }
 
 async fn counts(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    done(proxy::fan_merge_objects(st, &r, c, true).await?)
+    let mut v = proxy::fan_merge_value(st, &r, c, true).await;
+    proxy::indexed_counts(st, &r, c, &mut v);
+    done(ok_json(v))
 }
