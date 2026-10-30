@@ -23,7 +23,7 @@ services:
       # so the proxy can rewrite secrets in place. Bind-mounted single files: atomic
       # rename fails, so secret rewriting uses safe in-place write.
       - ./jmp.toml:/etc/jmp.toml
-      # Data dir: id map (ids.tsv), sessions (sessions.json), catalog cache,
+      # Data dir: state database (jmp.db: id map, sessions), catalog cache,
       # and auto-generated secret key (secret.key). The image runs as uid 65532
       # and /var/lib/jmp is owned by 65532:65532 mode 700. For arbitrary uid
       # (e.g. `user: "99:100"` for Unraid), chown on the host first:
