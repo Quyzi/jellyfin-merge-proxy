@@ -1,7 +1,7 @@
 # Real Jellyfin test bed
 
 Scripts used to test the proxy against real Jellyfin servers (Jellyfin
-12.3.0 at the time of writing). They create test data and containers on the
+12.4.0 at the time of writing). They create test data and containers on the
 machine they run on; nothing here is used by the proxy itself.
 
 | Script | Does |
@@ -25,3 +25,11 @@ JMP_IMAGE=localhost/jellyfin-merge-proxy:test JMP_IMAGE_USER=99:100 \
 See the header of `scripts/real-jellyfin-test.sh` for all variables
 (server URLs, ports, credentials, PKI directory). Metadata (ProviderIds)
 comes from TMDB, so the servers need internet access for the dedupe checks.
+
+Scenarios live in `scripts/real-jellyfin/scenario-*.sh`. `scenario-index.sh`
+checks the catalog index: queries answered from it, exact totals and paging
+at every depth, every `SortBy` key in both orders against each upstream's own
+order of the same titles (including keys missing from the DTOs and unrated
+items), genre/person/studio filters and lists across servers, `Items/Filters`,
+a split series as one series, canonical ids that match search hints and
+survive a restart, and fallback for parameters the index does not know.
