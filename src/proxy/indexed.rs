@@ -90,7 +90,8 @@ pub(super) fn run_query(
         let i = snap.item_index(&it.id)?;
         Some(st.userdata.fact(user, snap, i))
     };
-    let all = iq.run(snap, &|s| is_live(st, s), &fact);
+    let mut all = iq.run(snap, &|s| is_live(st, s), &fact);
+    st.parental.retain(user, snap, &mut all);
     Some((iq, all))
 }
 
@@ -135,15 +136,15 @@ pub(super) async fn hydrate(
         .iter()
         .filter_map(|k| q_get(client_q, k).map(|v| (k.to_string(), v.to_string())))
         .collect();
+    let user = c.user_id.as_str();
     let futs = by_server.into_iter().filter_map(|(s, ids)| {
         let up = st.backend(s)?;
         let extra = extra.clone();
         Some(async move {
             let mut got: Vec<(String, Value)> = vec![];
-            if up.ensure_login().await.is_err() {
+            let Ok(uc) = up.login_as(Some(user)).await else {
                 return (up, None, got);
-            }
-            let uc = up.session().await;
+            };
             for chunk in ids.chunks(100) {
                 let mut q = vec![("Ids".to_string(), chunk.join(","))];
                 q.extend(extra.iter().cloned());
@@ -153,7 +154,10 @@ pub(super) async fn hydrate(
                     "Items".to_string(),
                 ];
                 let segs = crate::paths::adapt(path, &mut q, uc.modern, uc.user_id.as_deref());
-                match up.get_json(&path_with_query(&segs, &q)).await {
+                match up
+                    .get_json_as(Some(user), &path_with_query(&segs, &q))
+                    .await
+                {
                     Ok((s, mut v)) if s.is_success() => {
                         if let Some(Value::Array(a)) = v.get_mut("Items").map(Value::take) {
                             for it in a {
@@ -223,6 +227,10 @@ pub async fn indexed_show_children(
 ) -> Option<Result<Response>> {
     let endpoint = if episodes { "episodes" } else { "seasons" };
     let series = r.segs.get(1)?.clone();
+    let sid = crate::types::normalize_hex_id(&series).and_then(|n| ProxyItemId::parse(&n));
+    if sid.is_some_and(|id| st.parental.blocks(&c.user_id, &id)) {
+        return Some(Ok(err_resp(StatusCode::NOT_FOUND, "Item not found")));
+    }
     let mut q: Vec<(String, String)> = r
         .query
         .iter()

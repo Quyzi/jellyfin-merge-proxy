@@ -60,6 +60,7 @@ impl MediaBackend for JellyfinBackend {
             version: st.version,
             user_id: st.user_id,
             token_age_secs: st.obtained.map(|t| t.elapsed().as_secs()),
+            user_accounts: self.accounts.len(),
         }
     }
 
@@ -88,26 +89,27 @@ impl MediaBackend for JellyfinBackend {
         let token = self.state.read().await.token.clone();
         let is_password = self.credentials.read().unwrap().kind() == "password";
         *self.state.write().await = AuthState::default();
-        let Some(token) = token.filter(|_| is_password) else {
-            return;
-        };
-        let r = self.build_request(
-            Method::POST,
-            "Sessions/Logout",
-            self.auth_headers(Some(token.expose())),
-            None,
-        );
-        match r {
-            Ok(r) => match self.raw_send(r, false).await {
-                Ok(resp) => {
-                    tracing::info!(upstream = %self.name, status = resp.status().as_u16(), "ended upstream session")
-                }
-                Err(e) => {
-                    tracing::debug!(upstream = %self.name, "logout failed: {}", e.without_url())
-                }
-            },
-            Err(e) => tracing::debug!(upstream = %self.name, "logout: {e}"),
+        if let Some(token) = token.filter(|_| is_password) {
+            self.logout(&token, &self.device_id).await;
         }
+        self.logout_accounts(self.accounts.all()).await;
+    }
+
+    fn has_account(&self, user: &str) -> bool {
+        self.accounts.get(user).is_some()
+    }
+
+    async fn login_as(&self, user: Option<&str>) -> Result<SessionInfo, BackendError> {
+        self.ensure_login().await?;
+        let shared = self.session().await;
+        let Some(a) = user.and_then(|u| self.accounts.get(u)) else {
+            return Ok(shared);
+        };
+        let l = a.login(&self.channel(&a), None).await?;
+        Ok(SessionInfo {
+            user_id: l.user_id,
+            modern: shared.modern,
+        })
     }
 
     /// Retries once after re-login on 401.
@@ -121,11 +123,22 @@ impl MediaBackend for JellyfinBackend {
             });
         }
         self.ensure_login().await?;
+        let account = req.as_user.as_deref().and_then(|u| self.accounts.get(u));
         let mut attempt = 0;
         loop {
-            let token = self.token().await;
+            let token = match &account {
+                Some(a) => Some(
+                    a.login(&self.channel(a), None)
+                        .await?
+                        .token
+                        .expose()
+                        .to_string(),
+                ),
+                None => self.token().await,
+            };
             let mut h = req.headers.clone();
-            h.extend(self.auth_headers(token.as_deref()));
+            let device = account.as_ref().map_or(&self.device_id, |a| &a.device_id);
+            h.extend(self.auth_headers_for(token.as_deref(), device));
             let r =
                 self.build_request(req.method.clone(), &req.path_and_query, h, req.body.clone())?;
             let resp = match self.raw_send(r, req.streaming).await {
@@ -147,7 +160,12 @@ impl MediaBackend for JellyfinBackend {
                 tracing::info!(upstream = %self.name, "401 from upstream, re-authenticating");
                 counter!(names::UPSTREAM_REAUTH, "server" => self.name.clone()).increment(1);
                 counter!(names::UPSTREAM_RETRIES, "server" => self.name.clone(), "reason" => "unauthorized").increment(1);
-                self.login(token.as_deref()).await?;
+                match &account {
+                    Some(a) => {
+                        a.login(&self.channel(a), token.as_deref()).await?;
+                    }
+                    None => self.login(token.as_deref()).await?,
+                }
                 continue;
             }
             let status = resp.status();

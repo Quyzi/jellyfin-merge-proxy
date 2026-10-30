@@ -5,7 +5,9 @@
 //! to canonical ids), the state the upstream account holds (played, play
 //! counts, resume points, favourites, likes) is imported for that user,
 //! never overwriting state the proxy already has. The pair is recorded so
-//! it is imported only once.
+//! it is imported only once. A user with their own `[[user.account]]` on
+//! a server imports from that account instead (recorded as
+//! `server#account`, so adding an account later imports it once too).
 
 use super::rules::from_upstream;
 use super::ItemState;
@@ -79,45 +81,77 @@ impl Seeder {
         }
         let users = st.authenticator.ids();
         for up in set.iter().filter(|b| !b.is_down()) {
-            let pending: Vec<&String> = users
-                .iter()
-                .filter(|u| !self.is_done(u, up.name()))
-                .collect();
-            if pending.is_empty() {
-                continue;
-            }
-            let rows = match fetch(st, up.as_ref()).await {
-                Ok(r) => r,
-                Err(e) => {
-                    counter!(names::USERDATA_SEEDS, "outcome" => "error").increment(1);
-                    tracing::warn!(upstream = %up.name(), "importing user data failed: {e}");
+            // Users with their own account import from it (once, under a
+            // separate mark so adding an account later imports it too);
+            // the rest share one fetch from the server's shared account.
+            let mut shared: Vec<(&String, String)> = vec![];
+            for u in &users {
+                let mark = seed_mark(up.as_ref(), u);
+                if self.is_done(u, &mark) {
                     continue;
                 }
-            };
-            for u in pending {
-                let n = st.userdata.table().seed(u, rows.clone());
-                if let Err(e) = self.store.mark_seeded(u, up.name()) {
-                    tracing::warn!("saving user data seed mark failed: {e}");
+                if up.has_account(u) {
+                    self.seed(st, up.as_ref(), Some(u), &[(u, mark)]).await;
+                } else {
+                    shared.push((u, mark));
                 }
-                self.done
-                    .lock()
-                    .unwrap()
-                    .insert((u.clone(), up.name().to_string()));
-                counter!(names::USERDATA_SEEDS, "outcome" => "ok").increment(1);
-                tracing::info!(upstream = %up.name(), items = n, "imported upstream user data");
             }
+            if !shared.is_empty() {
+                self.seed(st, up.as_ref(), None, &shared).await;
+            }
+        }
+    }
+
+    /// Fetch `up`'s state (as `account`'s user, or the shared account) and
+    /// import it for each `(user, mark)`.
+    async fn seed(
+        &self,
+        st: &Shared,
+        up: &dyn MediaBackend,
+        account: Option<&str>,
+        users: &[(&String, String)],
+    ) {
+        let rows = match fetch(st, up, account).await {
+            Ok(r) => r,
+            Err(e) => {
+                counter!(names::USERDATA_SEEDS, "outcome" => "error").increment(1);
+                tracing::warn!(upstream = %up.name(), own_account = account.is_some(), "importing user data failed: {e}");
+                return;
+            }
+        };
+        for (u, mark) in users {
+            let n = st.userdata.table().seed(u, rows.clone());
+            if let Err(e) = self.store.mark_seeded(u, mark) {
+                tracing::warn!("saving user data seed mark failed: {e}");
+            }
+            self.done
+                .lock()
+                .unwrap()
+                .insert(((*u).clone(), mark.clone()));
+            counter!(names::USERDATA_SEEDS, "outcome" => "ok").increment(1);
+            tracing::info!(upstream = %up.name(), items = n, own_account = account.is_some(), "imported upstream user data");
         }
     }
 }
 
-/// Every item with state on `up` (as the account the proxy uses), keyed by
-/// canonical proxy id.
+/// The seed mark for a (user, server): the server name, or
+/// `name#account` when the user has their own account there.
+fn seed_mark(up: &dyn MediaBackend, user: &str) -> String {
+    if up.has_account(user) {
+        format!("{}#account", up.name())
+    } else {
+        up.name().to_string()
+    }
+}
+
+/// Every item with state on `up` (as `account`'s own upstream user, or
+/// the shared account), keyed by canonical proxy id.
 async fn fetch(
     st: &Shared,
     up: &dyn MediaBackend,
+    account: Option<&str>,
 ) -> anyhow::Result<Vec<(ProxyItemId, ItemState)>> {
-    up.ensure_login().await?;
-    let uc = up.session().await;
+    let uc = up.login_as(account).await?;
     let uid = uc.user_id.clone().unwrap_or_default();
     let page = st.cfg().index.page_size;
     let mut out: HashMap<ProxyItemId, ItemState> = HashMap::new();
@@ -128,7 +162,7 @@ async fn fetch(
                 "Users/{uid}/Items?Recursive=true&Filters={f}&EnableUserData=true\
                  &EnableImages=false&StartIndex={start}&Limit={page}"
             );
-            let (status, v) = up.get_json(&q).await?;
+            let (status, v) = up.get_json_as(account, &q).await?;
             if !status.is_success() {
                 anyhow::bail!("HTTP {status}");
             }

@@ -23,6 +23,7 @@ pub mod error;
 pub mod ids;
 pub mod index;
 pub mod merge;
+pub mod parental;
 pub mod password;
 pub mod paths;
 pub mod proxy;
@@ -84,6 +85,8 @@ pub struct AppState {
     /// Per-proxy-user watch state.
     pub userdata: Arc<userdata::UserDataService>,
     pub seeder: Arc<userdata::seed::Seeder>,
+    /// Per-user parental rating limits.
+    pub parental: Arc<parental::service::ParentalService>,
     /// Copies of one series/season on several servers.
     pub siblings: Arc<siblings::SiblingTable>,
     pub sessions: Arc<auth::Sessions>,
@@ -189,6 +192,10 @@ impl AppState {
         rewriters.push(Box::new(rewrite::MeteredRewriter(
             userdata::view::UserDataOverlay::new(userdata.clone()),
         )));
+        let parental = Arc::new(parental::service::ParentalService::new(&cfg, index.clone()));
+        rewriters.push(Box::new(rewrite::MeteredRewriter(
+            parental::filter::ParentalFilter::new(parental.clone()),
+        )));
         let seeder = Arc::new(userdata::seed::Seeder::new(store));
         let sessions = Arc::new(sessions);
         let auth = Arc::new(users::MeteredAuthenticator(
@@ -224,6 +231,7 @@ impl AppState {
         hub.subscribe(listener_tls.clone());
         hub.subscribe(Arc::new(reload::CatalogCacheReload(catalog.clone())));
         hub.subscribe(userdata.clone());
+        hub.subscribe(parental.clone());
         hub.subscribe(Arc::new(reload::RestartNotices));
 
         let st = Arc::new(AppState {
@@ -237,6 +245,7 @@ impl AppState {
             index,
             userdata,
             seeder,
+            parental,
             siblings: Arc::new(siblings),
             sessions,
             authenticator: auth,

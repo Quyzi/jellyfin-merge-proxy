@@ -25,6 +25,7 @@ rustls (no OpenSSL), tracing, metrics + Prometheus exporter.
 - [Running without Docker](#running-without-docker)
 - [Adding the server in a TV / client app](#adding-the-server-in-a-tv--client-app)
 - [Configuration](#configuration)
+- [Per-user upstream accounts and parental limits](#per-user-upstream-accounts-and-parental-limits)
 - [Proxy user passwords (argon2id)](#proxy-user-passwords-argon2id)
 - [TLS](#tls)
 - [Logging](#logging)
@@ -324,7 +325,8 @@ Sections:
 | Section | Keys |
 |---|---|
 | `[proxy]` | `listen`, `name`, `id` (32 hex, optional), `reported_version`, `data_dir` (default `/var/lib/jmp`), `unknown_routes` (`primary`\|`empty`), `upstream_timeout_secs`, `reload_interval_secs` (default 3), `drain_timeout_secs` (default 300), `rewrite_secrets` (default true) |
-| `[[user]]` | `name`, `password` (plaintext, `{ plain = ".." }`, `{ argon2 = ".." }` or a bare `$argon2id$...` string) |
+| `[[user]]` | `name`, `password` (plaintext, `{ plain = ".." }`, `{ argon2 = ".." }` or a bare `$argon2id$...` string), `max_parental_rating` (a rating name such as `"PG"` or a score such as `10`), `block_unrated` (default false) |
+| `[[user.account]]` (per user, optional) | `server` (a `[[server]]` name), `user` + `password`, or `api_key` (+ `user_id`): that user's own account on that server |
 | `[[server]]` (alias `[[upstream]]`) | `name`, `server` (base URL, sub-path allowed), `user` + `password`, or `api_key` (+ `user` or `user_id`), `priority` (lower wins in dedupe; default = position), `enabled`, optional `[server.tls]` |
 | `[merge]` | `merge_libraries_by_name`, `dedupe`, `dedupe_types`, `label_colliding_libraries`, `fanout_limit` |
 | `[index]` | `enabled`, `refresh_interval_secs` (default 600), `page_size` (default 500), `prefer` (`priority`\|`resolution`) |
@@ -343,6 +345,49 @@ The first enabled upstream is the **primary**: it receives unknown routes
 With an `api_key`, the proxy needs to know which upstream user's library and
 watch state to use: set `user_id`, or `user` (looked up via the API). If neither resolves a
 user, a warning is logged and user-scoped calls to that upstream will fail.
+
+## Per-user upstream accounts and parental limits
+
+By default every proxy user reaches a server through the `[[server]]`
+account. A `[[user.account]]` gives one proxy user their own account on one
+server (the others keep using the shared one):
+
+```toml
+[[user]]
+name = "kids"
+password = "..."
+max_parental_rating = "PG"   # Jellyfin's MaxParentalRating; or a score: 10
+block_unrated = false        # Jellyfin's "block items with no rating"
+
+[[user.account]]
+server = "gummybear"
+user = "kids"
+password = "..."             # encrypted in place, like [[server]] secrets
+```
+
+* **What uses the user's account:** every forwarded request (item details,
+  playback, streams, images), fan-out lists (`Latest`, search, non-indexed
+  lists), hydration of index pages, user-data write-through and playback
+  reports, and the one-time import of watch state (`seed_from_upstream`
+  imports from the user's own account; adding an account later imports it
+  once). Each account has its own upstream device id, so its sessions show
+  up as that user in the server's dashboard.
+* **What stays on the shared account:** the library list, the catalog
+  index crawl and sibling discovery. Indexed results therefore do not follow
+  the account's own library access or parental settings on the server; use
+  `max_parental_rating` on the proxy user for that.
+* **Parental limits** follow Jellyfin's rule: an item is shown when its
+  rating score is at most the limit; unrated items are shown unless
+  `block_unrated` (which applies to videos, series and collections, never to
+  folders). Episodes and seasons without their own rating use the series'.
+  Rating names are resolved through the servers' `Localization/ParentalRatings`
+  tables (collected by the index crawl); until the first crawl, or for an
+  unknown name, the limit fails closed (score 0), and rated videos in live
+  fan-out results are hidden. Limits apply to index queries (exact totals),
+  `NextUp`, `Resume`, fan-out lists (`Latest`, search hints; page totals are
+  lowered), and direct item requests (`404`, like Jellyfin). Images of
+  blocked items are still served, as in Jellyfin. Limits and accounts are hot
+  reloadable.
 
 ## Proxy user passwords (argon2id)
 
@@ -365,7 +410,7 @@ user, a warning is logged and user-scoped calls to that upstream will fail.
 ## Upstream secret encryption
 
 * **When `rewrite_secrets = true` (default)**, upstream `password` and `api_key`
-  values that are plaintext are encrypted with **XChaCha20-Poly1305** (authenticated
+  values (in `[[server]]` and in `[[user.account]]`) that are plaintext are encrypted with **XChaCha20-Poly1305** (authenticated
   encryption) and written back to the config file as `enc:v1:<base64>`.
 * The encryption key (256-bit) is loaded from:
   1. `JMP_SECRET_KEY` env var (64 hex characters), or
@@ -554,9 +599,10 @@ counts as changed when its modification time or size changes. A reload:
      applied in place;
    * the new server set is swapped in atomically: a request uses the set it
      started with, never a half-updated one;
-3. applies users (existing sessions of remaining users survive), merge
-   settings (clearing the views cache), the log filter and the listener
-   certificate.
+3. applies users (existing sessions of remaining users survive), per-user
+   upstream accounts (a changed or removed account's upstream session is
+   ended; unchanged ones keep their login), parental limits, merge settings
+   (clearing the views cache), the log filter and the listener certificate.
 
 Renaming a server is a remove plus an add: the old name's ids answer 410 and
 the new name gets new ids. A reload that would leave no enabled server, or
@@ -729,7 +775,9 @@ login, browsing, playback (direct stream with Range, HLS checked with
 ffprobe, subtitles), user data (verified on the owning upstream), the
 catalog index (exact totals and deep paging, every sort key compared with
 each upstream's own order, genre/person filters across servers, split shows,
-stable canonical ids across restarts) and eleven config scenarios
+stable canonical ids across restarts), per-user accounts and parental limits
+(own upstream user, encryption on disk, hiding with exact totals, 404s, hot
+reload) and eleven config scenarios
 (merge/dedupe/priority, server down and back, API key upstream, HTTPS
 upstream, TLS listener, hot reload, cache, `unknown_routes`).
 Set `JMP_IMAGE` to run the proxy from the container image instead of the
@@ -742,12 +790,18 @@ Bugs it found have regression tests in `tests/real_jellyfin_regressions.rs`.
   real-server suite (Jellyfin 12.4.0) issues the HTTP calls a client makes
   with curl; no TV, phone or desktop app has been tried, so no
   client-compatibility claims are made.
-* **Shared upstream identity.** All proxy users use the same upstream
-  account per server. Watch state is kept per proxy user by the proxy
-  (`[userdata]`), but the upstream account's own state (what the servers'
-  native clients see, and what `write_through` updates) is shared, parental
-  controls are the upstream account's, and a proxy user added later imports
-  (`seed_from_upstream`) whatever that shared account has watched by then.
+* **Upstream identity is shared unless configured.** Proxy users without a
+  `[[user.account]]` for a server use that server's shared account: its
+  native-client state (what `write_through` updates), its parental settings,
+  and what a newly added proxy user imports are the shared account's. Even
+  with per-user accounts, the library list and the index come from the
+  shared account, so an account's own library restrictions on the server are
+  not applied to indexed results (an indexed page can come back short when
+  hydration with the user's token drops items it may not see).
+* **Parental limits are the proxy's, not the server's,** for indexed
+  results; a rating name that no server lists is treated as unrated (as in
+  Jellyfin). `Latest` hides blocked items after the upstream picked its
+  `Limit`, so a restricted user can get fewer than `Limit` items.
 * **Per-user state needs the index.** While the index is cold (first crawl
   of a new server) per-user filters, `Resume` and `NextUp` fall back to live
   fan-out, which filters on the upstream account's state. Items the index

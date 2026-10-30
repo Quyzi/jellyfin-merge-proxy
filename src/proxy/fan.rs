@@ -36,6 +36,7 @@ pub async fn fan_list_on(
     let endpoint = spec.name;
     let mut queried = 0usize;
     let mut futs = vec![];
+    let user = c.user_id.as_str();
     for (u, parent) in targets {
         let Some(up) = st.backend(u) else {
             continue;
@@ -69,15 +70,17 @@ pub async fn fan_list_on(
             let outcome = |o: &'static str| {
                 counter!(names::FANOUT_RESULTS, "endpoint" => endpoint, "server" => up.name().to_string(), "outcome" => o).increment(1);
             };
-            if let Err(e) = up.ensure_login().await {
-                tracing::warn!(upstream = %up.name(), "skipping: {e}");
-                outcome("skipped");
-                return Err(());
-            }
-            let uc = up.session().await;
+            let uc = match up.login_as(Some(user)).await {
+                Ok(uc) => uc,
+                Err(e) => {
+                    tracing::warn!(upstream = %up.name(), "skipping: {e}");
+                    outcome("skipped");
+                    return Err(());
+                }
+            };
             let mut q = q;
             let segs = crate::paths::adapt(path, &mut q, uc.modern, uc.user_id.as_deref());
-            match up.get_json(&path_with_query(&segs, &q)).await {
+            match up.get_json_as(Some(user), &path_with_query(&segs, &q)).await {
                 Ok((s, v)) if s.is_success() => {
                     outcome("success");
                     Ok((up, uc, v))
@@ -128,10 +131,12 @@ pub async fn fan_list_on(
             _ => None,
         });
         let mut items = items.unwrap_or_default();
-        total += t.map(|t| t as usize).unwrap_or(items.len());
+        let upstream_total = t.map(|t| t as usize).unwrap_or(items.len());
         for it in items.iter_mut() {
             st.rewriters.rewrite_json(it, &ctx);
         }
+        let hidden = st.parental.retain_dtos(&c.user_id, &mut items);
+        total += upstream_total.saturating_sub(hidden);
         let (priority, server) = (up.priority(), up.id());
         all.extend(items.into_iter().map(|item| Ranked {
             priority,
@@ -246,12 +251,15 @@ pub async fn fan_merge_objects(st: &Shared, r: &Req, c: &Client, sum: bool) -> R
         let q = query_for(st, &r.query, u, parent.as_ref().map(|p| p.as_str()), None)?;
         let up = st.backend(u)?.clone();
         let segs = segs.clone();
+        let user = c.user_id.as_str();
         Some(async move {
-            up.ensure_login().await.ok()?;
-            let uc = up.session().await;
+            let uc = up.login_as(Some(user)).await.ok()?;
             let mut q = q;
             let segs = crate::paths::adapt(segs, &mut q, uc.modern, uc.user_id.as_deref());
-            match up.get_json(&path_with_query(&segs, &q)).await {
+            match up
+                .get_json_as(Some(user), &path_with_query(&segs, &q))
+                .await
+            {
                 Ok((s, v)) if s.is_success() => Some((up, uc, v)),
                 _ => None,
             }

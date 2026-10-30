@@ -5,6 +5,7 @@
 //! Tokens are cached, refreshed once on a 401, and a server that fails to
 //! connect is marked down for a short back-off.
 
+use super::accounts::AccountPool;
 use super::credentials::{self, AuthChannel, UpstreamCredentials};
 use super::transport::{error_kind, HttpTransport, Instrumented, Transport};
 use super::{
@@ -68,6 +69,8 @@ pub struct JellyfinBackend {
     /// Set by `retire`: stragglers holding an old snapshot get `Down`
     /// instead of logging in again.
     retired: std::sync::atomic::AtomicBool,
+    /// Per-user accounts on this server (`[[user.account]]`).
+    accounts: AccountPool,
 }
 
 impl std::fmt::Debug for JellyfinBackend {
@@ -136,6 +139,7 @@ impl JellyfinBackend {
         record_client_cert_expiry(&cfg.name, &tls, provider);
         let device_id = crate::ids::hash_id(&["device", &cfg.name.to_ascii_lowercase()]);
         gauge!(names::UPSTREAM_UP, "server" => cfg.name.clone()).set(1.0);
+        let accounts = AccountPool::from_config(&cfg.name, global);
         Ok(JellyfinBackend {
             id,
             name: cfg.name.clone(),
@@ -152,6 +156,7 @@ impl JellyfinBackend {
             device_id,
             in_flight: InFlight::default(),
             retired: std::sync::atomic::AtomicBool::new(false),
+            accounts,
         })
     }
 
@@ -160,10 +165,10 @@ impl JellyfinBackend {
         *self.transport.write().unwrap() = t;
     }
 
-    fn auth_header(&self, token: Option<&str>) -> String {
+    fn auth_header(&self, token: Option<&str>, device: &str) -> String {
         let mut s = format!(
             "MediaBrowser Client=\"{CLIENT_NAME}\", Device=\"jellyfin-merge-proxy\", DeviceId=\"{}\", Version=\"{}\"",
-            self.device_id,
+            device,
             env!("CARGO_PKG_VERSION")
         );
         if let Some(t) = token {
@@ -172,9 +177,11 @@ impl JellyfinBackend {
         s
     }
 
-    fn auth_headers(&self, token: Option<&str>) -> HeaderMap {
+    /// Per-user accounts use their own device id: Jellyfin ends a user's
+    /// older sessions on the same device when it logs in again.
+    fn auth_headers_for(&self, token: Option<&str>, device: &str) -> HeaderMap {
         let mut h = HeaderMap::new();
-        if let Ok(hv) = HeaderValue::from_str(&self.auth_header(token)) {
+        if let Ok(hv) = HeaderValue::from_str(&self.auth_header(token, device)) {
             h.insert(AUTHORIZATION, hv.clone());
             h.insert("X-Emby-Authorization", hv);
         }
@@ -259,6 +266,39 @@ impl JellyfinBackend {
         r
     }
 
+    /// End an upstream session (`POST Sessions/Logout`). Never for API
+    /// keys: logging out with one would revoke the key.
+    async fn logout(&self, token: &Secret, device: &str) {
+        let r = self.build_request(
+            Method::POST,
+            "Sessions/Logout",
+            self.auth_headers_for(Some(token.expose()), device),
+            None,
+        );
+        match r {
+            Ok(r) => match self.raw_send(r, false).await {
+                Ok(resp) => {
+                    tracing::info!(upstream = %self.name, status = resp.status().as_u16(), "ended upstream session")
+                }
+                Err(e) => {
+                    tracing::debug!(upstream = %self.name, "logout failed: {}", e.without_url())
+                }
+            },
+            Err(e) => tracing::debug!(upstream = %self.name, "logout: {e}"),
+        }
+    }
+
+    /// Log out password sessions of per-user accounts that were removed,
+    /// changed, or are being retired.
+    async fn logout_accounts(&self, list: Vec<Arc<super::accounts::Account>>) {
+        for a in list {
+            let is_password = a.kind() == "password";
+            if let Some(l) = a.take().await.filter(|_| is_password) {
+                self.logout(&l.token, &a.device_id).await;
+            }
+        }
+    }
+
     async fn do_login(&self) -> Result<(), BackendError> {
         let mut new = AuthState::default();
         let (_, info) = self
@@ -281,42 +321,6 @@ impl JellyfinBackend {
     }
 }
 
-#[async_trait]
-impl AuthChannel for JellyfinBackend {
-    fn server_name(&self) -> &str {
-        &self.name
-    }
-    async fn call(
-        &self,
-        method: Method,
-        path: &str,
-        token: Option<&str>,
-        body: Option<Value>,
-    ) -> Result<(StatusCode, Value), BackendError> {
-        let mut h = if token.is_some() || body.is_some() {
-            self.auth_headers(token)
-        } else {
-            HeaderMap::new()
-        };
-        let body = body.map(|b| {
-            h.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-            Bytes::from(serde_json::to_vec(&b).unwrap_or_default())
-        });
-        let req = self.build_request(method, path, h, body)?;
-        let resp = self.raw_send(req, false).await.map_err(|e| {
-            let e = e.without_url();
-            self.mark_down(&e.to_string());
-            BackendError::Unreachable {
-                server: self.name.clone(),
-                msg: e.to_string(),
-            }
-        })?;
-        let status = resp.status();
-        let v = resp.json::<Value>().await.unwrap_or(Value::Null);
-        Ok((status, v))
-    }
-}
-
 pub fn version_at_least(v: &str, major: u64, minor: u64) -> bool {
     let mut it = v.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
     let ma = it.next().unwrap_or(0);
@@ -324,6 +328,7 @@ pub fn version_at_least(v: &str, major: u64, minor: u64) -> bool {
     (ma, mi) >= (major, minor)
 }
 
+mod channel;
 mod media;
 mod reloadable;
 

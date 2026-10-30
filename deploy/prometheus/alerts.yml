@@ -143,3 +143,12 @@ groups:
         annotations:
           summary: "Upstreams refuse user data changes"
           description: "More than 20% of watch-state changes sent to upstream copies failed for 15 minutes. The proxy's own state is correct; the servers' native clients may show outdated watch state."
+      - alert: UserAccountLoginFailures
+        expr: |
+          sum by (instance, server) (increase(jmp_upstream_user_auth_total{outcome="failure"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A per-user upstream account cannot log in to {{ $labels.server }}"
+          description: "A [[user.account]] on {{ $labels.server }} was refused (wrong or changed credentials). That proxy user's requests to the server fail until the account is fixed."

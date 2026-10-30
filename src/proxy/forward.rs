@@ -142,6 +142,22 @@ pub(super) const FWD_RESP_HEADERS: &[&str] = &[
     "vary",
 ];
 
+/// Whether the path names an indexed item the client's user may not see
+/// (Jellyfin answers those as not found). Images stay reachable, as in
+/// Jellyfin.
+fn parental_blocked(st: &Shared, c: &Client, segs: &[String]) -> bool {
+    if c.user_id.is_empty()
+        || !st.parental.restricted(&c.user_id)
+        || segs.iter().any(|s| s.eq_ignore_ascii_case("Images"))
+    {
+        return false;
+    }
+    segs.iter()
+        .filter(|s| looks_like_id(s))
+        .filter_map(|s| normalize_hex_id(s).and_then(|n| crate::types::ProxyItemId::parse(&n)))
+        .any(|id| st.parental.blocks(&c.user_id, &id))
+}
+
 /// Forward a request to upstream `u`, translating ids both ways.
 pub async fn forward(
     st: &Shared,
@@ -161,14 +177,20 @@ pub async fn forward(
             return Ok(err_resp(StatusCode::SERVICE_UNAVAILABLE, "no upstream"));
         }
     };
-    if let Err(e) = up.ensure_login().await {
-        tracing::warn!(upstream = %up.name(), "{e}");
-        return Ok(err_resp(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "upstream unavailable",
-        ));
+    let raw_segs = segs_override.as_ref().unwrap_or(&r.segs);
+    if parental_blocked(st, c, raw_segs) {
+        return Ok(err_resp(StatusCode::NOT_FOUND, "Item not found"));
     }
-    let uc = up.session().await;
+    let uc = match up.login_as(Some(&c.user_id)).await {
+        Ok(uc) => uc,
+        Err(e) => {
+            tracing::warn!(upstream = %up.name(), "{e}");
+            return Ok(err_resp(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "upstream unavailable",
+            ));
+        }
+    };
     let user_ids = st.authenticator.ids();
     let ic = in_ctx(st, up.as_ref(), &uc, &user_ids);
     let segs_override_none = segs_override.is_none();
@@ -225,7 +247,8 @@ pub async fn forward(
     let req = BackendRequest::new(r.method.clone(), pq)
         .headers(headers)
         .body(body)
-        .streaming(true);
+        .streaming(true)
+        .as_user(Some(&c.user_id));
     let resp = match up.send(req).await {
         Ok(resp) => resp,
         Err(e @ BackendError::Down { .. }) => {
