@@ -7,8 +7,8 @@
 
 use crate::error::ConfigError;
 use chacha20poly1305::{
-    aead::{Aead, KeyInit, OsRng},
-    XChaCha20Poly1305,
+    aead::{Aead, Generate, KeyInit},
+    XChaCha20Poly1305, XNonce,
 };
 use rand::RngCore;
 use std::fmt;
@@ -220,16 +220,16 @@ impl XChaCha20Cipher {
 impl SecretCipher for XChaCha20Cipher {
     fn encrypt(&self, plaintext: &str) -> Result<String, ConfigError> {
         let cipher = XChaCha20Poly1305::new(self.key.as_bytes().into());
-        let mut nonce_bytes = [0u8; 24];
-        OsRng.fill_bytes(&mut nonce_bytes);
-        let nonce = chacha20poly1305::XNonce::from(nonce_bytes);
+        // Fresh random 24-byte nonce from the OS RNG (getrandom).
+        let nonce = XNonce::try_generate()
+            .map_err(|e| ConfigError::Invalid(format!("nonce generation failed: {e}")))?;
 
         let mut ciphertext = cipher
             .encrypt(&nonce, plaintext.as_bytes())
             .map_err(|e| ConfigError::Invalid(format!("encryption failed: {e}")))?;
 
-        // Prepend nonce to ciphertext
-        let mut combined = nonce_bytes.to_vec();
+        // v1 layout: nonce (24) || ciphertext || tag (16), standard base64.
+        let mut combined = nonce.to_vec();
         combined.append(&mut ciphertext);
 
         Ok(format!("{}{}", ENC_PREFIX, base64::encode(&combined)))
@@ -249,10 +249,11 @@ impl SecretCipher for XChaCha20Cipher {
         }
 
         let (nonce_bytes, ciphertext) = combined.split_at(24);
-        let nonce = chacha20poly1305::XNonce::from_slice(nonce_bytes);
+        let nonce = XNonce::try_from(nonce_bytes)
+            .map_err(|_| ConfigError::Invalid("encrypted secret has a bad nonce".into()))?;
 
         let cipher = XChaCha20Poly1305::new(self.key.as_bytes().into());
-        let mut plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
+        let mut plaintext = cipher.decrypt(&nonce, ciphertext).map_err(|_| {
             ConfigError::Invalid("decryption failed: wrong key or corrupted data".into())
         })?;
 
