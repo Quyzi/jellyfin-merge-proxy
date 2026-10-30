@@ -226,7 +226,7 @@ Community Applications template (bridge network, port 8096, config file at
 `/mnt/user/appdata/jellyfin-merge-proxy/jmp.toml` bind-mounted to `/etc/jmp.toml`,
 data directory at `/mnt/user/appdata/jellyfin-merge-proxy/data` mounted to
 `/var/lib/jmp`, `--user 99:100`, an optional certificates path that is never
-required). The image name in it is a placeholder (`ghcr.io/OWNER/...`). Install
+required), pulling `ghcr.io/quyzi/jellyfin-merge-proxy:latest`. Install
 steps, first-run config and TV setup: [`unraid/README.md`](unraid/README.md). The
 XML is checked with `xmllint --noout unraid/jellyfin-merge-proxy.xml`.
 **IMPORTANT**: Back up `/var/lib/jmp/secret.key`; losing it means re-entering all
