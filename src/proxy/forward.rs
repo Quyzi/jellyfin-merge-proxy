@@ -14,12 +14,33 @@ pub async fn playstate(st: &Shared, r: Req, c: &Client) -> Result<Response> {
         .map(String::from)
         .or_else(|| q_get(&r.query, "ItemId").map(String::from));
     if let Some(id) = item {
+        record_playback(st, &r, c, &id, &body);
         if let Some(Target::Item { upstream, .. }) = resolve_or_refresh(st, &id).await {
             return forward(st, upstream, r, c, None).await;
         }
     }
     tracing::debug!("playstate report for unknown item, ignoring");
     Ok(no_content())
+}
+
+/// Update the proxy's own play state from a playback report.
+fn record_playback(st: &Shared, r: &Req, c: &Client, id: &str, body: &Value) {
+    use crate::userdata::service::PlayEvent;
+    if !st.userdata.enabled() || c.user_id.is_empty() {
+        return;
+    }
+    let Some(ev) = r.segs.last().and_then(|s| PlayEvent::from_seg(s)) else {
+        return;
+    };
+    let Some(pid) = crate::types::ProxyItemId::parse(id) else {
+        return;
+    };
+    let pos = body
+        .get("PositionTicks")
+        .and_then(|v| v.as_i64())
+        .or_else(|| q_get(&r.query, "PositionTicks").and_then(|v| v.parse().ok()));
+    st.userdata
+        .playback(&c.user_id, &pid, ev, pos, &crate::dto::now_iso());
 }
 
 /// Find the owning upstream of a request by the first proxy id in its path,
