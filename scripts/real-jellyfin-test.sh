@@ -9,7 +9,7 @@
 #   cargo build --release                 (or JMP_IMAGE=... to test an image)
 #
 # usage: scripts/real-jellyfin-test.sh [scenario ...]
-#   scenarios: base merge_off dedupe_off priority server_down api_key
+#   scenarios: base index merge_off dedupe_off priority server_down api_key
 #              https_upstream listener_tls hot_reload cache unknown_empty
 #   (default: all)
 #
@@ -448,7 +448,10 @@ scenario_unknown_empty() {
   check "unknown_routes=empty: compat routes still forwarded" '[ "$(api Localization/Countries | jq length)" -gt 100 ]'
 }
 
-ALL=(base merge_off dedupe_off priority server_down api_key https_upstream listener_tls hot_reload cache unknown_empty)
+# shellcheck source=real-jellyfin/scenario-index.sh
+. "$ROOT/scripts/real-jellyfin/scenario-index.sh"
+
+ALL=(base index merge_off dedupe_off priority server_down api_key https_upstream listener_tls hot_reload cache unknown_empty)
 [ $# -gt 0 ] && ALL=("$@")
 trap stop_proxy EXIT
 reset_userdata

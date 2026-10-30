@@ -15,11 +15,18 @@ pub struct Migration {
 }
 
 /// Every migration, in order. Append only; never edit a released one.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "init",
-    sql: include_str!("migrations/0001_init.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "init",
+        sql: include_str!("migrations/0001_init.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "index",
+        sql: include_str!("migrations/0002_index.sql"),
+    },
+];
 
 /// Schema version this binary writes.
 pub fn latest() -> u32 {
@@ -79,7 +86,18 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         assert_eq!(current_version(&conn).unwrap(), 0);
         assert_eq!(migrate(&mut conn).unwrap(), latest());
-        assert_eq!(tables(&conn), ["ids", "sessions", "sibling_links"]);
+        assert_eq!(
+            tables(&conn),
+            [
+                "canonical_ids",
+                "ids",
+                "index_entries",
+                "index_servers",
+                "merged_views",
+                "sessions",
+                "sibling_links"
+            ]
+        );
         // Running again is a no-op (the CREATE TABLEs would fail otherwise).
         assert_eq!(migrate(&mut conn).unwrap(), latest());
     }

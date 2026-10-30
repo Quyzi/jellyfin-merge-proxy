@@ -96,3 +96,53 @@ fn store_round_trip_keeps_ids() {
         assert_eq!(m2.size_of(ServerId(0)), 1);
     }
 }
+
+#[test]
+fn grouped_ids_fail_over_and_resolve_per_server() {
+    use crate::index::groups::{CanonicalGroups, GroupMap};
+    let table = HashedIdTable::new(reg(&["a", "b"]));
+    let up = "0123456789abcdef0123456789abcdef";
+    let pa = ProxyItemId::parse(&table.to_proxy(ServerId(0), up)).unwrap();
+    let pb = ProxyItemId::parse(&table.to_proxy(ServerId(1), up)).unwrap();
+    let groups = Arc::new(CanonicalGroups::new());
+    let mut map = GroupMap::new();
+    map.insert(pa.clone(), vec![pa.clone(), pb.clone()]);
+    groups.publish(map);
+    let m = GroupedIdMapper::new(table, groups);
+    let down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let d = down.clone();
+    m.set_liveness(Arc::new(move |s| {
+        !(s == ServerId(0) && d.load(std::sync::atomic::Ordering::Relaxed))
+    }));
+    let server = |t: Option<Target>| match t {
+        Some(Target::Item { upstream, .. }) => upstream,
+        _ => panic!("not an item"),
+    };
+    assert_eq!(server(m.decode(&pa)), ServerId(0), "canonical = best copy");
+    assert_eq!(
+        server(m.decode(&pb)),
+        ServerId(1),
+        "member decodes literally"
+    );
+    down.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        server(m.decode(&pa)),
+        ServerId(1),
+        "fails over to a live copy"
+    );
+    assert_eq!(
+        m.resolve_for(pa.as_str(), ServerId(1)).unwrap().as_str(),
+        up,
+        "canonical id resolves to the copy on the asked server"
+    );
+    // Ranking changed (s2 preferred): the canonical id follows the best copy.
+    down.store(false, std::sync::atomic::Ordering::Relaxed);
+    let groups = Arc::new(CanonicalGroups::new());
+    let mut map = GroupMap::new();
+    map.insert(pa.clone(), vec![pb.clone(), pa.clone()]);
+    groups.publish(map);
+    let m = GroupedIdMapper::new(HashedIdTable::new(reg(&["a", "b"])), groups);
+    m.encode(ServerId(0), &UpstreamItemId::parse(up).unwrap());
+    m.encode(ServerId(1), &UpstreamItemId::parse(up).unwrap());
+    assert_eq!(server(m.decode(&pa)), ServerId(1));
+}

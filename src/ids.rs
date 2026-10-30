@@ -6,7 +6,10 @@
 //! Jellyfin GUID. Because a hash cannot be inverted, every id handed to a
 //! client is recorded in an in-memory table which is also saved to the
 //! state store ([`crate::store`]), so ids stay valid across proxy restarts.
-//! [`MeteredIdMapper`] adds the `jmp_ids_*` metrics to any mapper.
+//! [`MeteredIdMapper`] adds the `jmp_ids_*` metrics to any mapper,
+//! [`PersistentViews`] saves merged library views and [`GroupedIdMapper`]
+//! makes the canonical id of an item with copies on several servers
+//! resolve on each of them.
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -309,8 +312,12 @@ impl IdMapper for HashedIdTable {
     }
 }
 
+mod grouped;
 mod metered;
+mod views;
+pub use grouped::{GroupedIdMapper, Liveness};
 pub use metered::MeteredIdMapper;
+pub use views::PersistentViews;
 
 #[cfg(test)]
 mod tests;

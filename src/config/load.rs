@@ -124,6 +124,7 @@ impl Config {
             tls: raw.tls.clone(),
             upstream_tls: raw.upstream_tls.clone(),
             database: raw.database.clone(),
+            index: raw.index.clone(),
             logging: raw.logging.clone(),
             metrics: raw.metrics.clone(),
             debug: raw.debug.clone(),
@@ -135,6 +136,7 @@ impl Config {
 
     fn validate(&self) -> Result<(), ConfigError> {
         let bad = |m: String| Err(ConfigError::Invalid(m));
+        self.index.validate().map_err(ConfigError::Invalid)?;
         if self.users.is_empty() {
             return bad("at least one [[user]] is required".into());
         }

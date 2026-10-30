@@ -112,3 +112,14 @@ groups:
         annotations:
           summary: "Low catalog cache hit ratio"
           description: "Cache hit ratio has been below 30% for 15 minutes ({{ $value | humanizePercentage }}). Consider a longer [cache] ttl."
+
+      - alert: CatalogIndexStale
+        expr: |
+          (time() - max by (instance, server) (jmp_index_last_sync_timestamp_seconds)) > 7200
+          and on(instance, server) (jmp_upstream_up == 1 and on(instance, server) jmp_upstream_configured{} == 1)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Catalog index for {{ $labels.server }} is stale"
+          description: "{{ $labels.server }} is up but its catalog index was last crawled more than 2 hours ago. Library queries still work but may miss new items; check the logs for index crawl errors."

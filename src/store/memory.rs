@@ -19,6 +19,7 @@ struct Inner {
     /// Sessions in insertion order (by token).
     sessions: Vec<String>,
     session_map: HashMap<String, Session>,
+    index: super::index::MemIndex,
 }
 
 impl MemoryStore {
@@ -87,6 +88,30 @@ impl SessionStore for MemoryStore {
             ..
         } = &mut *g;
         sessions.retain(|t| session_map.contains_key(t));
+        Ok(())
+    }
+}
+
+impl IndexStore for MemoryStore {
+    fn load_index(&self) -> Result<Vec<StoredServerIndex>, StoreError> {
+        Ok(self.inner.lock().unwrap().index.load_index())
+    }
+    fn save_server_index(&self, idx: &StoredServerIndex) -> Result<(), StoreError> {
+        self.inner.lock().unwrap().index.save_server_index(idx);
+        Ok(())
+    }
+    fn load_canonical(&self) -> Result<Vec<(ProxyItemId, ProxyItemId)>, StoreError> {
+        Ok(self.inner.lock().unwrap().index.load_canonical())
+    }
+    fn save_canonical(&self, rows: &[(ProxyItemId, ProxyItemId)]) -> Result<(), StoreError> {
+        self.inner.lock().unwrap().index.save_canonical(rows);
+        Ok(())
+    }
+    fn load_views(&self) -> Result<Vec<StoredView>, StoreError> {
+        Ok(self.inner.lock().unwrap().index.load_views())
+    }
+    fn save_view(&self, view: &StoredView) -> Result<(), StoreError> {
+        self.inner.lock().unwrap().index.save_view(view);
         Ok(())
     }
 }
