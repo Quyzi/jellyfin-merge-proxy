@@ -185,16 +185,16 @@ up_userdata() { # base name -> UserData of that movie/episode for the upstream u
   up_get "$1" "$t" "Items?Recursive=true&IncludeItemTypes=Movie,Episode&searchTerm=$(jq -rn --arg v "$2" '$v|@uri')&enableUserData=true" \
     | jq -c --arg n "$2" '[.Items[] | select(.Name==$n)][0].UserData'
 }
-# Clear played/favorite/resume state of the upstream user on every server, so
+# Clear played/favorite/resume/like state of the upstream user on every server, so
 # Latest/Resume/NextUp start from a known state (Latest hides played items).
 reset_userdata() {
-  local base t id
+  local base t id p
   for base in "$S1" "$S2" "$S3"; do
     t=$(up_token "$base" "$UP_USER" "$UP_PASS")
-    for id in $(up_get "$base" "$t" "Items?Recursive=true&IncludeItemTypes=Movie,Episode&enableUserData=true" \
-        | jq -r '.Items[] | select(.UserData.Played or .UserData.IsFavorite or (.UserData.PlaybackPositionTicks > 0)) | .Id'); do
-      for p in UserPlayedItems UserFavoriteItems; do
-        curl -s -o /dev/null -X DELETE -H "Authorization: MediaBrowser Client=\"jmp-verify\", Device=\"verify\", DeviceId=\"jmp-verify\", Version=\"1\", Token=\"$t\"" "$base/$p/$id"
+    for id in $(up_get "$base" "$t" "Items?Recursive=true&IncludeItemTypes=Movie,Episode,Series&enableUserData=true" \
+        | jq -r '.Items[] | select(.UserData.Played or .UserData.IsFavorite or (.UserData.PlaybackPositionTicks > 0) or .UserData.Likes != null) | .Id'); do
+      for p in "UserPlayedItems/$id" "UserFavoriteItems/$id" "UserItems/$id/Rating"; do
+        curl -s -o /dev/null -X DELETE -H "Authorization: MediaBrowser Client=\"jmp-verify\", Device=\"verify\", DeviceId=\"jmp-verify\", Version=\"1\", Token=\"$t\"" "$base/$p"
       done
     done
   done
@@ -459,8 +459,10 @@ scenario_unknown_empty() {
 . "$ROOT/scripts/real-jellyfin/scenario-userdata.sh"
 # shellcheck source=real-jellyfin/scenario-accounts.sh
 . "$ROOT/scripts/real-jellyfin/scenario-accounts.sh"
+# shellcheck source=real-jellyfin/scenario-compat.sh
+. "$ROOT/scripts/real-jellyfin/scenario-compat.sh"
 
-ALL=(base index userdata accounts merge_off dedupe_off priority server_down api_key https_upstream listener_tls hot_reload cache unknown_empty)
+ALL=(base index userdata accounts compat_single merge_off dedupe_off priority server_down api_key https_upstream listener_tls hot_reload cache unknown_empty)
 [ $# -gt 0 ] && ALL=("$@")
 trap stop_proxy EXIT
 reset_userdata
