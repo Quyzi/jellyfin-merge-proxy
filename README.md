@@ -211,7 +211,7 @@ The image is a multi-stage build on Chainguard images
 non-root, rustls/aws-lc-rs for TLS. `JMP_CONFIG=/etc/jmp.toml`, port
 `8096`. `docker-compose.yml` bind-mounts `./jmp.toml` to `/etc/jmp.toml` and
 a volume for `/var/lib/jmp` (data), with commented mounts for certificates
-(`./certs:/config/certs:ro`) and an optional Prometheus service
+(`./certs:/etc/jmp/certs:ro`) and an optional Prometheus service
 (`deploy/prometheus.yml`). Pass `JMP_GIT_SHA=$(git rev-parse --short HEAD)`
 to stamp the build. Auto-generated secret key (for upstream secret encryption) is
 `/var/lib/jmp/secret.key`; override via `JMP_SECRET_KEY` env (64 hex characters).

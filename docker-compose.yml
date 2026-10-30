@@ -32,9 +32,9 @@ services:
       # OPTIONAL TLS material (listener cert/key, client CA, upstream CAs, mTLS
       # client cert). Not needed for plain HTTP, the default. Files are watched
       # and hot-reloaded; point [tls]/[server.tls] paths here.
-      # - ./certs:/config/certs:ro
+      # - ./certs:/etc/jmp/certs:ro
       # Or e.g. certificates managed by certbot / Caddy on the host:
-      # - /etc/letsencrypt/live/media.example.com:/config/certs/le:ro
+      # - /etc/letsencrypt/live/media.example.com:/etc/jmp/certs/le:ro
 
   # Optional Prometheus (scrapes /metrics, evaluates deploy/prometheus/alerts.yml)
   # and Grafana (provisioned datasource + deploy/grafana-dashboard.json).
