@@ -143,11 +143,13 @@ fn add_counts(snap: &Snapshot, kind: NameKind, page: &[usize], all: &[usize], ou
                 }
                 NameKind::Person => it.people.iter().any(|(n, _)| n == ni),
             };
-            if !has {
+            let e = snap.primary(it);
+            // Seasons are not counted (Jellyfin counts the series and its
+            // episodes).
+            if !has || e.is("Season") {
                 continue;
             }
             child += 1;
-            let e = snap.primary(it);
             if let Some(k) = KEYS.iter().position(|(t, _)| e.is(t)) {
                 counts[k] += 1;
             }
