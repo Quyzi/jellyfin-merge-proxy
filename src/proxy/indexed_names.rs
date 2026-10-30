@@ -2,7 +2,8 @@
 //! index: names are merged across servers (one "Drama", one id that works
 //! as a filter on every server) and the lists are exact.
 
-use super::indexed::{index_outcome, run_query, warm_snapshot};
+use super::fetch::fetch_dtos;
+use super::indexed::{index_outcome, is_live, run_query, warm_snapshot};
 use super::*;
 use crate::index::snapshot::{NameKind, Snapshot};
 use std::collections::BTreeSet;
@@ -70,6 +71,94 @@ fn name_dto(st: &Shared, snap: &Snapshot, ni: usize) -> Value {
         "LocationType": "FileSystem",
         "MediaType": "Unknown",
     })
+}
+
+/// The upstream DTOs of a page of names (images, `UserData`, ...) from a
+/// live member of each, with the canonical id; the minimal DTO when no
+/// member answers.
+async fn hydrate_names(
+    st: &Shared,
+    c: &Client,
+    snap: &Snapshot,
+    page: &[usize],
+    q: &[(String, String)],
+) -> Vec<Value> {
+    let picks: Vec<Option<(ServerId, String)>> = page
+        .iter()
+        .map(|ni| {
+            let n = &snap.names[*ni];
+            std::iter::once(&n.id)
+                .chain(n.members.iter())
+                .filter_map(|m| match st.ids.decode(m) {
+                    Some(Target::Item { upstream, id }) if is_live(st, upstream) => {
+                        Some((upstream, id.into_string()))
+                    }
+                    _ => None,
+                })
+                .next()
+        })
+        .collect();
+    let mut dtos = fetch_dtos(st, c, &picks, q).await;
+    picks
+        .into_iter()
+        .zip(page)
+        .map(|(pick, ni)| match pick.and_then(|p| dtos.remove(&p)) {
+            Some(mut v) => {
+                v["Id"] = Value::String(snap.names[*ni].id.as_str().to_string());
+                v
+            }
+            None => name_dto(st, snap, *ni),
+        })
+        .collect()
+}
+
+/// Jellyfin's per-type item counts on genre/studio DTOs (sent when the
+/// client passes `IncludeItemTypes`), over every item the user can see.
+fn add_counts(snap: &Snapshot, kind: NameKind, page: &[usize], all: &[usize], out: &mut [Value]) {
+    const KEYS: &[(&str, &str)] = &[
+        ("Movie", "MovieCount"),
+        ("Series", "SeriesCount"),
+        ("Episode", "EpisodeCount"),
+        ("Trailer", "TrailerCount"),
+        ("Program", "ProgramCount"),
+        ("Audio", "SongCount"),
+        ("MusicAlbum", "AlbumCount"),
+        ("MusicArtist", "ArtistCount"),
+        ("MusicVideo", "MusicVideoCount"),
+    ];
+    for (ni, v) in page.iter().zip(out.iter_mut()) {
+        let mut counts = [0u64; 9];
+        let mut child = 0u64;
+        for &i in all {
+            let it = &snap.items[i];
+            // Episodes count under their series' studios, as in Jellyfin.
+            let has = match kind {
+                NameKind::Genre => it.genres.contains(ni),
+                NameKind::Studio => {
+                    it.studios.contains(ni)
+                        || (snap.primary(it).is("Episode")
+                            && it
+                                .series
+                                .is_some_and(|s| snap.items[s].studios.contains(ni)))
+                }
+                NameKind::Person => it.people.iter().any(|(n, _)| n == ni),
+            };
+            let e = snap.primary(it);
+            // Seasons are not counted (Jellyfin counts the series and its
+            // episodes).
+            if !has || e.is("Season") {
+                continue;
+            }
+            child += 1;
+            if let Some(k) = KEYS.iter().position(|(t, _)| e.is(t)) {
+                counts[k] += 1;
+            }
+        }
+        v["ChildCount"] = json!(child);
+        for ((_, key), n) in KEYS.iter().zip(counts) {
+            v[*key] = json!(n);
+        }
+    }
 }
 
 /// `Genres`, `Studios`, `Persons` from the index.
@@ -142,22 +231,42 @@ pub async fn indexed_names(
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     let limit: Option<usize> = q_get(q, "Limit").and_then(|s| s.parse().ok());
-    let items: Vec<Value> = list
+    let page: Vec<usize> = list
         .into_iter()
         .skip(start)
         .take(limit.unwrap_or(usize::MAX))
-        .map(|(_, ni)| name_dto(st, &snap, ni))
+        .map(|(_, ni)| ni)
         .collect();
+    let mut items = hydrate_names(st, c, &snap, &page, q).await;
+    let with_counts = kind != NameKind::Person && q_get(q, "IncludeItemTypes").is_some();
+    if with_counts {
+        // Jellyfin counts every type in the client's scope (ParentId, ...),
+        // not only `IncludeItemTypes`.
+        let mut drop = NAME_PARAMS.to_vec();
+        drop.extend(["includeitemtypes", "excludeitemtypes", "mediatypes"]);
+        let all = item_scope(st, &snap, q, endpoint, &drop, &c.user_id).unwrap_or_default();
+        add_counts(&snap, kind, &page, &all, &mut items);
+    }
+    let user_data = q_get(q, "EnableUserData").map(|v| v.eq_ignore_ascii_case("true"));
+    if !user_data.unwrap_or(kind != NameKind::Genre) {
+        for v in &mut items {
+            if let Some(m) = v.as_object_mut() {
+                m.remove("UserData");
+            }
+        }
+    }
+    // Jellyfin reports 0, not the count, when the client opts out.
+    let total =
+        if q_get(q, "EnableTotalRecordCount").is_some_and(|v| v.eq_ignore_ascii_case("false")) {
+            0
+        } else {
+            total
+        };
     Some(Ok(ok_json(dto::query_result(items, total, start))))
 }
 
 /// `Items/Filters` (legacy) and `Items/Filters2` from the index.
-pub async fn indexed_filters(
-    st: &Shared,
-    r: &Req,
-    c: &Client,
-    v2: bool,
-) -> Option<Result<Response>> {
+pub async fn indexed_filters(st: &Shared, r: &Req, c: &Client, v2: bool) -> Option<Value> {
     let endpoint = "filters";
     let snap = warm_snapshot(st, endpoint)?;
     let items = item_scope(
@@ -203,5 +312,5 @@ pub async fn indexed_filters(
             "Years": years.into_iter().collect::<Vec<_>>(),
         })
     };
-    Some(Ok(ok_json(v)))
+    Some(v)
 }

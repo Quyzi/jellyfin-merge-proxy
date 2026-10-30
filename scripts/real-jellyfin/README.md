@@ -54,3 +54,17 @@ hidden with exact totals, `404` for the item and its episodes, hidden from
 search hints, `Latest` and `NextUp`, and that hot reloading `block_unrated`,
 a rating name and a numeric score changes what `kids` sees, with exact
 paging.
+
+`scenario-compat.sh` checks client compatibility. `compat_single` puts the
+proxy in front of s1 alone and sends about 40 requests the way jellyfin-web,
+Android TV and Swiftfin do (library sorts and paging, filters, `Genres`,
+`Studios`, `Persons`, `Years`, `Items/Filters(2)`, search, item details and
+image tags, `UserData`, played/favourite filters, `Resume`, `NextUp`,
+`Latest`, `Items/Counts`) to the proxy and to s1 directly, and compares the
+answers: the same items in the same order, the same totals, every key s1
+sends with the same JSON type (ids, keys and dates by type only), the same
+values otherwise (numbers within 1e-9), the same image kinds, and the same
+picture behind an image tag. `compat_merged` runs over all three servers
+and checks that names, years, filter values and languages are the union
+(once each), that `Items/Counts` and genre counts match the merged library
+and that a title on two servers appears once in search.

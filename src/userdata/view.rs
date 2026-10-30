@@ -22,7 +22,7 @@ pub fn dto(
     }
     match counts {
         Some(c) => {
-            if c.total > 0 && c.unplayed < c.total {
+            if c.total > 0 {
                 let pct = (c.total - c.unplayed) as f64 * 100.0 / c.total as f64;
                 m.insert("PlayedPercentage".into(), json!(pct));
             }

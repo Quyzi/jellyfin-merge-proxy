@@ -346,8 +346,10 @@ pub fn display_prefs(st: &Shared, r: &Req, c: &Client) -> Response {
 mod admin;
 mod context;
 mod fan;
+mod fetch;
 mod forward;
 mod indexed;
+mod indexed_counts;
 mod indexed_names;
 mod indexed_user;
 mod list;
@@ -360,6 +362,7 @@ use context::*;
 pub use fan::*;
 pub use forward::*;
 pub use indexed::*;
+pub use indexed_counts::*;
 pub use indexed_names::*;
 pub use indexed_user::*;
 pub use list::*;
