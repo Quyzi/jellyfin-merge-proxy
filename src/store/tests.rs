@@ -66,6 +66,31 @@ pub(crate) fn conformance(s: &dyn Store) {
     assert_eq!(s.load_ids().unwrap().len(), 4);
     assert_eq!(s.load_links().unwrap().len(), 3);
     assert_eq!(s.load_sessions().unwrap().len(), 2);
+
+    user_data(s);
+}
+
+fn user_data(s: &dyn Store) {
+    use crate::userdata::ItemState;
+    let ud = |user: &str, n: u8, played: bool| UserDataRow {
+        user: user.into(),
+        item: pid(n),
+        state: ItemState {
+            played,
+            position_ticks: 7,
+            ..Default::default()
+        },
+    };
+    assert!(s.load_user_data().unwrap().is_empty());
+    s.put_user_data(&[ud("a", 1, false), ud("b", 1, true)])
+        .unwrap();
+    s.put_user_data(&[ud("a", 1, true)]).unwrap();
+    let mut got = s.load_user_data().unwrap();
+    got.sort_by(|x, y| x.user.cmp(&y.user));
+    assert_eq!(got, vec![ud("a", 1, true), ud("b", 1, true)], "upsert");
+    s.mark_seeded("a", "srv").unwrap();
+    s.mark_seeded("a", "srv").unwrap();
+    assert_eq!(s.load_seeded().unwrap(), vec![("a".into(), "srv".into())]);
 }
 
 #[test]

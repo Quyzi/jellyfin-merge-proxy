@@ -10,15 +10,7 @@ use super::sort::{parse_sort, SortCtx, SortKey};
 use crate::types::{normalize_hex_id, ProxyItemId, ServerId};
 
 /// Per-user state of one item (from the proxy's user data store).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct UserFact {
-    pub played: bool,
-    pub play_count: i64,
-    pub position_ticks: i64,
-    pub favorite: bool,
-    pub likes: Option<bool>,
-    pub last_played: Option<String>,
-}
+pub use crate::userdata::ItemState as UserFact;
 
 /// What a `ParentId` points at.
 #[derive(Debug, Clone)]
@@ -90,6 +82,7 @@ const PASSTHROUGH: &[&str] = &[
     "collapseboxsetitems",
     "hasquerylimit",
     "format",
+    "excludeactivesessions",
     "_",
 ];
 
@@ -390,4 +383,4 @@ pub fn norm(v: &str) -> Option<String> {
 
 #[cfg(test)]
 #[path = "query_tests.rs"]
-mod tests;
+pub(crate) mod tests;
