@@ -44,6 +44,14 @@ pub mod names {
     pub const DEDUPE_WINNER: &str = "jmp_dedupe_winner_total";
     pub const LIBRARY_GROUPS: &str = "jmp_library_groups";
 
+    pub const INDEX_ITEMS: &str = "jmp_index_items";
+    pub const INDEX_SYNCS: &str = "jmp_index_syncs_total";
+    pub const INDEX_SYNC_DURATION: &str = "jmp_index_sync_duration_seconds";
+    pub const INDEX_LAST_SYNC: &str = "jmp_index_last_sync_timestamp_seconds";
+    pub const INDEX_CANONICAL: &str = "jmp_index_canonical";
+    pub const INDEX_BUILD_DURATION: &str = "jmp_index_build_duration_seconds";
+    pub const INDEX_QUERIES: &str = "jmp_index_queries_total";
+
     pub const CACHE_REQUESTS: &str = "jmp_cache_requests_total";
     pub const CACHE_ENTRIES: &str = "jmp_cache_entries";
     pub const CACHE_BYTES: &str = "jmp_cache_bytes";
@@ -139,7 +147,7 @@ pub const METRICS: &[MetricDef] = &[
     m!(HTTP_IN_FLIGHT, Gauge, "", "Client requests currently being processed (headers not yet sent)."),
     m!(HTTP_RESPONSE_SIZE, Histogram, "route", "Response body size when known up-front (Content-Length)."),
     m!(HTTP_ERRORS, Counter, "kind", "Requests that failed inside the proxy, by error kind (unauthorized, not_found, upstream_unavailable, upstream_error, bad_request, payload_too_large)."),
-    m!(STAGE_DURATION, Histogram, "stage", "Duration of internal pipeline stages: auth, id_decode, fanout, rewrite, merge, dedupe, sort_page, serialize, views_build."),
+    m!(STAGE_DURATION, Histogram, "stage", "Duration of internal pipeline stages: auth, id_decode, fanout, rewrite, merge, dedupe, sort_page, index_page (index-answered page incl. DTO fetch), serialize, views_build."),
     m!(FANOUT_UPSTREAMS, Histogram, "endpoint", "Number of upstreams queried by one fan-out request."),
     m!(FANOUT_RESULTS, Counter, "endpoint, server, outcome", "Per-upstream result of fan-out calls: success, http_error, timeout, error, skipped (endpoint=views: library list refresh)."),
     m!(FANOUT_PARTIAL, Counter, "endpoint", "Fan-out responses served with results from only some of the targeted upstreams (endpoint=views: a server's libraries were missing from the list)."),
@@ -150,9 +158,16 @@ pub const METRICS: &[MetricDef] = &[
     m!(IDS_TABLE_SIZE, Gauge, "server", "Entries in the id mapping table."),
     m!(MERGE_ITEMS_IN, Counter, "endpoint", "Items received from upstreams for merged lists."),
     m!(MERGE_ITEMS_OUT, Counter, "endpoint", "Items returned to clients from merged lists (after dedupe and paging)."),
-    m!(DEDUPE_DROPPED, Counter, "key", "Duplicates removed, by match key: tmdb, imdb, tvdb, title (search hints: type+name+year), index (season/episode number of a show split across servers), name."),
+    m!(DEDUPE_DROPPED, Counter, "key", "Duplicates removed, by match key: tmdb, imdb, tvdb, title (search hints: type+name+year), index (season/episode number of a show split across servers), name, canonical (same canonical id from the catalog index)."),
     m!(DEDUPE_WINNER, Counter, "server", "Dedupe decisions won by each upstream."),
     m!(LIBRARY_GROUPS, Gauge, "kind", "Library views presented: merged (combined across servers) or single."),
+    m!(INDEX_ITEMS, Gauge, "server", "Items held in the catalog index for each server (last successful crawl)."),
+    m!(INDEX_SYNCS, Counter, "server, outcome", "Index crawls of a server: success, error, skipped (server down)."),
+    m!(INDEX_SYNC_DURATION, Histogram, "server", "Duration of one server's index crawl."),
+    m!(INDEX_LAST_SYNC, Gauge, "server", "Unix time of the server's last successful index crawl."),
+    m!(INDEX_CANONICAL, Gauge, "kind", "Canonical index contents: items (after grouping), merged (items with copies on several servers), names (merged genres/studios/people)."),
+    m!(INDEX_BUILD_DURATION, Histogram, "", "Time to rebuild the index snapshot (grouping, ranking, canonical ids)."),
+    m!(INDEX_QUERIES, Counter, "endpoint, outcome", "Library queries: index (answered from the index), cold (index not ready, live fan-out), unsupported (query the index cannot express, live fan-out)."),
     m!(CACHE_REQUESTS, Counter, "cache, outcome", "Catalog cache lookups: hit, miss, stale (refresh forced/expired)."),
     m!(CACHE_ENTRIES, Gauge, "cache, server", "Entries held in the catalog cache."),
     m!(CACHE_BYTES, Gauge, "cache, server", "Approximate serialized size of the catalog cache."),
@@ -160,7 +175,7 @@ pub const METRICS: &[MetricDef] = &[
     m!(CACHE_REFRESH_FAILURES, Counter, "cache, server", "Failed catalog refreshes."),
     m!(CACHE_LAST_REFRESH, Gauge, "cache, server", "Unix time of the last successful catalog refresh."),
     m!(CACHE_EVICTIONS, Counter, "cache", "Catalog cache entries replaced/evicted."),
-    m!(PERSIST_OPS, Counter, "store, op, outcome", "Persistence operations (ids, siblings and sessions: load and save)."),
+    m!(PERSIST_OPS, Counter, "store, op, outcome", "Persistence operations (store: ids, siblings, sessions, views, index, canonical; op: load and save)."),
     m!(DB_JOURNAL_MODE, Gauge, "mode", "1 for the SQLite journal mode in effect (read back from SQLite after applying `[database] journal_mode`), 0 for the other modes."),
     m!(DB_SCHEMA_VERSION, Gauge, "", "Schema version of the state database after migrations."),
     m!(DB_IMPORTED_ROWS, Counter, "kind", "Rows imported from the pre-database files (ids.tsv, siblings.tsv, sessions.json) on first start."),
