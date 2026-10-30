@@ -1,7 +1,7 @@
 # Grafana dashboard and alerts: development and testing
 
 `deploy/grafana-dashboard.json` is **generated**. Do not edit it by hand (or
-export it from the Grafana UI); change `xtask/src/dashboard.rs` and run:
+export it from the Grafana UI); change `xtask/src/dashboard/` and run:
 
 ```sh
 cargo xtask dashboard   # regenerate deploy/grafana-dashboard.json, then check
@@ -12,7 +12,7 @@ cargo xtask check       # fail if the JSON is stale or invalid (also part of `ca
 
 `cargo xtask check` (and the `xtask` tests run by `cargo test --workspace`) verify:
 
-* the committed JSON is byte-identical to what `xtask/src/dashboard.rs` generates
+* the committed JSON is byte-identical to what `xtask/src/dashboard/` generates
   (staleness);
 * every metric in panel queries, annotations and `deploy/prometheus/alerts.yml`
   exists in `jmp::telemetry::METRICS` (or is a `process_*` metric), with
