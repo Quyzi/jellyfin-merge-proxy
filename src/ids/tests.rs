@@ -9,29 +9,6 @@ fn reg(names: &[&str]) -> Arc<ServerRegistry> {
 }
 
 #[test]
-fn removed_servers_keep_their_ids() {
-    let dir = tempfile::tempdir().unwrap();
-    let up = "fedcba9876543210fedcba9876543210";
-    let pid = {
-        let m = HashedIdTable::new(reg(&["a", "gone"]))
-            .with_persistence(dir.path())
-            .unwrap();
-        m.to_proxy(ServerId(1), up)
-    };
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    // "gone" is no longer configured: its ids still decode to its own id.
-    let r = reg(&["a"]);
-    let m2 = HashedIdTable::new(r.clone())
-        .with_persistence(dir.path())
-        .unwrap();
-    let Some(Target::Item { upstream, .. }) = m2.resolve(&pid) else {
-        panic!("id of removed server lost");
-    };
-    assert_eq!(r.name(upstream).as_deref(), Some("gone"));
-    assert_eq!(r.lookup("a"), Some(ServerId(0)));
-}
-
-#[test]
 fn round_trip() {
     let m = HashedIdTable::new(reg(&["a", "b"]));
     let up = "0123456789abcdef0123456789ABCDEF";
@@ -82,18 +59,40 @@ fn metered_decorator_is_transparent() {
 }
 
 #[test]
-fn persistence() {
+fn store_round_trip_keeps_ids() {
+    use crate::config::DatabaseConfig;
+    use crate::store::{IdStore, MemoryStore, SqliteStore};
     let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("jmp.db");
     let up = "fedcba9876543210fedcba9876543210";
-    let pid = {
-        let m = HashedIdTable::new(reg(&["a"]))
-            .with_persistence(dir.path())
-            .unwrap();
-        m.to_proxy(ServerId(0), up)
-    };
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    let m2 = HashedIdTable::new(reg(&["a"]))
-        .with_persistence(dir.path())
-        .unwrap();
-    assert_eq!(m2.resolve_for(&pid, ServerId(0)).unwrap().as_str(), up);
+    let stores: [Arc<dyn Fn() -> Arc<dyn IdStore>>; 2] = [
+        {
+            let mem: Arc<dyn IdStore> = Arc::new(MemoryStore::new());
+            Arc::new(move || mem.clone())
+        },
+        Arc::new(move || {
+            Arc::new(SqliteStore::open(&db, &DatabaseConfig::default()).unwrap())
+                as Arc<dyn IdStore>
+        }),
+    ];
+    for open in stores {
+        let (pid, gone) = {
+            let m = HashedIdTable::new(reg(&["a", "gone"]))
+                .with_store(open())
+                .unwrap();
+            let pid = m.to_proxy(ServerId(0), up);
+            assert_eq!(m.to_proxy(ServerId(0), up), pid, "saved once");
+            (pid, m.to_proxy(ServerId(1), up))
+            // Dropping the table flushes the writer: no sleep needed.
+        };
+        assert_eq!(open().load_ids().unwrap().len(), 2);
+        let r = reg(&["a"]);
+        let m2 = HashedIdTable::new(r.clone()).with_store(open()).unwrap();
+        assert_eq!(m2.resolve_for(&pid, ServerId(0)).unwrap().as_str(), up);
+        let Some(Target::Item { upstream, .. }) = m2.resolve(&gone) else {
+            panic!("id of removed server lost");
+        };
+        assert_eq!(r.name(upstream).as_deref(), Some("gone"));
+        assert_eq!(m2.size_of(ServerId(0)), 1);
+    }
 }

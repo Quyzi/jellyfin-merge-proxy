@@ -15,8 +15,8 @@ name = "Jellyfin Merge Proxy"
 # id = "4a1f0c2e9b7d4e6f8a3c5b1d2e7f9a0c"
 # Jellyfin version reported to clients (clients gate features on it).
 reported_version = "10.10.7"
-# Where the id lookup table (ids.tsv), client sessions (sessions.json),
-# catalog cache, and auto-generated secret key (secret.key) are stored.
+# Where the state database (jmp.db: id lookup table, client sessions) and the
+# auto-generated secret key (secret.key) are stored.
 # Keep it on a volume so ids/logins/keys survive restarts.
 data_dir = "/var/lib/jmp"
 # Routes the proxy doesn't implement and that carry no known item id:
@@ -159,6 +159,19 @@ serve_stale_on_error = true    # serve an expired entry if the refresh fails
 # ca_path = "/config/certs/homelab-ca.pem"
 # min_version = "1.2"
 # insecure_skip_verify = false
+
+# ---------------------------------------------------------------------------
+# State database (SQLite): id mappings, series sibling links and client
+# sessions. Restart required to change. ids.tsv, siblings.tsv and
+# sessions.json from older versions are imported on first start and renamed
+# to *.migrated.
+# ---------------------------------------------------------------------------
+[database]
+# path = "/var/lib/jmp/jmp.db"   # default: <data_dir>/jmp.db
+journal_mode = "wal"             # "wal" | "delete" | "truncate" | "persist" | "memory" | "off"
+                                 # (use "delete" on network filesystems without shared memory)
+synchronous = "normal"           # "off" | "normal" | "full" | "extra"
+busy_timeout_ms = 5000
 
 # ---------------------------------------------------------------------------
 # Logging. RUST_LOG, when set, overrides `filter`. `filter` is hot-reloaded;

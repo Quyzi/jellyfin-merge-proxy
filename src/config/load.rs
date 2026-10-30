@@ -123,6 +123,7 @@ impl Config {
             cache: raw.cache.clone(),
             tls: raw.tls.clone(),
             upstream_tls: raw.upstream_tls.clone(),
+            database: raw.database.clone(),
             logging: raw.logging.clone(),
             metrics: raw.metrics.clone(),
             debug: raw.debug.clone(),
