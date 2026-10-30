@@ -90,7 +90,8 @@ pub(super) fn run_query(
         let i = snap.item_index(&it.id)?;
         Some(st.userdata.fact(user, snap, i))
     };
-    let all = iq.run(snap, &|s| is_live(st, s), &fact);
+    let mut all = iq.run(snap, &|s| is_live(st, s), &fact);
+    st.parental.retain(user, snap, &mut all);
     Some((iq, all))
 }
 
