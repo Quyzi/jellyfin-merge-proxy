@@ -459,7 +459,7 @@ pipeline stages, streaming, merge/dedupe, cache, auth, config/TLS with a
 certificate expiry table, process) and `datasource`, `instance` and `server`
 variables. Config reloads and TLS reloads are annotated.
 
-The dashboard JSON is generated from `xtask/src/dashboard.rs` by
+The dashboard JSON is generated from `xtask/src/dashboard/` by
 `cargo xtask dashboard`, and `cargo test` fails if it is stale or references a
 metric or label the proxy does not export. See `DASHBOARD_TESTING.md`.
 
