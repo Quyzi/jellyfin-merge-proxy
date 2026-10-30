@@ -61,6 +61,7 @@ pub mod names {
     pub const UPSTREAM_ERRORS: &str = "jmp_upstream_errors_total";
     pub const UPSTREAM_IN_FLIGHT: &str = "jmp_upstream_in_flight";
     pub const UPSTREAM_UP: &str = "jmp_upstream_up";
+    pub const UPSTREAM_CONFIGURED: &str = "jmp_upstream_configured";
     pub const UPSTREAM_RETRIES: &str = "jmp_upstream_retries_total";
     pub const UPSTREAM_REAUTH: &str = "jmp_upstream_reauth_total";
     pub const UPSTREAM_AUTH: &str = "jmp_upstream_auth_total";
@@ -168,6 +169,7 @@ pub const METRICS: &[MetricDef] = &[
     m!(UPSTREAM_ERRORS, Counter, "server, kind", "Upstream transport errors: connect, dns, tls, timeout, body, other."),
     m!(UPSTREAM_IN_FLIGHT, Gauge, "server", "Concurrent requests to each upstream (headers pending)."),
     m!(UPSTREAM_UP, Gauge, "server", "1 if the upstream is considered healthy, 0 while in back-off."),
+    m!(UPSTREAM_CONFIGURED, Gauge, "server", "1 while the [[server]] is enabled in the applied config, 0 after a reload removed or disabled it."),
     m!(UPSTREAM_RETRIES, Counter, "server, reason", "Upstream request retries (reason: unauthorized)."),
     m!(UPSTREAM_REAUTH, Counter, "server", "Re-authentications triggered by a 401."),
     m!(UPSTREAM_AUTH, Counter, "server, outcome", "Upstream logins: success, failure, unreachable."),
@@ -264,6 +266,20 @@ pub fn init_metrics() -> PrometheusHandle {
             }
         }
         gauge!(BUILD_INFO, "version" => env!("CARGO_PKG_VERSION"), "git_sha" => git_sha()).set(1.0);
+        // Export the reload counters at 0 from the start: a counter series that
+        // first appears at 1 is invisible to increase()/rate(), so the first
+        // failed reload would never reach the dashboard or ConfigReloadFailed.
+        for outcome in ["success", "unchanged", "error"] {
+            counter!(CONFIG_RELOADS, "outcome" => outcome).increment(0);
+        }
+        for change in ["added", "removed", "rebuilt", "changed"] {
+            counter!(CONFIG_UPSTREAM_CHANGES, "change" => change).increment(0);
+        }
+        for target in ["listener", "upstream"] {
+            for outcome in ["success", "error"] {
+                counter!(TLS_RELOADS, "target" => target, "outcome" => outcome).increment(0);
+            }
+        }
         handle
     })
     .clone()
