@@ -90,7 +90,7 @@ impl MediaBackend for JellyfinBackend {
         let is_password = self.credentials.read().unwrap().kind() == "password";
         *self.state.write().await = AuthState::default();
         if let Some(token) = token.filter(|_| is_password) {
-            self.logout(&token).await;
+            self.logout(&token, &self.device_id).await;
         }
         self.logout_accounts(self.accounts.all()).await;
     }
@@ -105,7 +105,7 @@ impl MediaBackend for JellyfinBackend {
         let Some(a) = user.and_then(|u| self.accounts.get(u)) else {
             return Ok(shared);
         };
-        let l = a.login(self, None).await?;
+        let l = a.login(&self.channel(&a), None).await?;
         Ok(SessionInfo {
             user_id: l.user_id,
             modern: shared.modern,
@@ -127,11 +127,18 @@ impl MediaBackend for JellyfinBackend {
         let mut attempt = 0;
         loop {
             let token = match &account {
-                Some(a) => Some(a.login(self, None).await?.token.expose().to_string()),
+                Some(a) => Some(
+                    a.login(&self.channel(a), None)
+                        .await?
+                        .token
+                        .expose()
+                        .to_string(),
+                ),
                 None => self.token().await,
             };
             let mut h = req.headers.clone();
-            h.extend(self.auth_headers(token.as_deref()));
+            let device = account.as_ref().map_or(&self.device_id, |a| &a.device_id);
+            h.extend(self.auth_headers_for(token.as_deref(), device));
             let r =
                 self.build_request(req.method.clone(), &req.path_and_query, h, req.body.clone())?;
             let resp = match self.raw_send(r, req.streaming).await {
@@ -155,7 +162,7 @@ impl MediaBackend for JellyfinBackend {
                 counter!(names::UPSTREAM_RETRIES, "server" => self.name.clone(), "reason" => "unauthorized").increment(1);
                 match &account {
                     Some(a) => {
-                        a.login(self, token.as_deref()).await?;
+                        a.login(&self.channel(a), token.as_deref()).await?;
                     }
                     None => self.login(token.as_deref()).await?,
                 }
