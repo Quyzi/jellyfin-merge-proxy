@@ -1,6 +1,6 @@
 //! `cargo xtask <command>` (alias in .cargo/config.toml).
 //!
-//!   dashboard  regenerate deploy/grafana-dashboard.json from src/dashboard.rs
+//!   dashboard  regenerate deploy/grafana-dashboard.json from src/dashboard/
 //!   check      fail if the committed dashboard is stale or invalid, or the
 //!              alert rules use unknown metrics/labels (also run by `cargo test`)
 
