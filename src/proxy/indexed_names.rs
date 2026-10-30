@@ -136,9 +136,10 @@ fn add_counts(snap: &Snapshot, kind: NameKind, page: &[usize], all: &[usize], ou
                 NameKind::Genre => it.genres.contains(ni),
                 NameKind::Studio => {
                     it.studios.contains(ni)
-                        || it
-                            .series
-                            .is_some_and(|s| snap.items[s].studios.contains(ni))
+                        || (snap.primary(it).is("Episode")
+                            && it
+                                .series
+                                .is_some_and(|s| snap.items[s].studios.contains(ni)))
                 }
                 NameKind::Person => it.people.iter().any(|(n, _)| n == ni),
             };
