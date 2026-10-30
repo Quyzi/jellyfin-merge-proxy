@@ -211,7 +211,7 @@ The image is a multi-stage build on Chainguard images
 non-root, rustls/aws-lc-rs for TLS. `JMP_CONFIG=/etc/jmp.toml`, port
 `8096`. `docker-compose.yml` bind-mounts `./jmp.toml` to `/etc/jmp.toml` and
 a volume for `/var/lib/jmp` (data), with commented mounts for certificates
-(`./certs:/config/certs:ro`) and an optional Prometheus service
+(`./certs:/etc/jmp/certs:ro`) and an optional Prometheus service
 (`deploy/prometheus.yml`). Pass `JMP_GIT_SHA=$(git rev-parse --short HEAD)`
 to stamp the build. Auto-generated secret key (for upstream secret encryption) is
 `/var/lib/jmp/secret.key`; override via `JMP_SECRET_KEY` env (64 hex characters).
@@ -226,7 +226,7 @@ Community Applications template (bridge network, port 8096, config file at
 `/mnt/user/appdata/jellyfin-merge-proxy/jmp.toml` bind-mounted to `/etc/jmp.toml`,
 data directory at `/mnt/user/appdata/jellyfin-merge-proxy/data` mounted to
 `/var/lib/jmp`, `--user 99:100`, an optional certificates path that is never
-required). The image name in it is a placeholder (`ghcr.io/OWNER/...`). Install
+required), pulling `ghcr.io/quyzi/jellyfin-merge-proxy:latest`. Install
 steps, first-run config and TV setup: [`unraid/README.md`](unraid/README.md). The
 XML is checked with `xmllint --noout unraid/jellyfin-merge-proxy.xml`.
 **IMPORTANT**: Back up `/var/lib/jmp/secret.key`; losing it means re-entering all
