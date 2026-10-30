@@ -48,20 +48,21 @@ client ─► axum router (telemetry middleware)
 | `PasswordHasher` / `PasswordVerifier` | `password` | `Argon2id`, `MeteredHasher<H>` | Proxy-user password hashing (argon2id) and verification. |
 | `ProxyAuthenticator` | `users` | `TomlAuthenticator<V>`, `MeteredAuthenticator<A>` | Proxy logins against `[[user]]` (also `Reloadable`). |
 | `IdMapper` | `ids` | `HashedIdTable` (persisted through an `IdStore`), `PersistentViews<M>` (merged views stored and reloaded), `MeteredIdMapper<M>`, `GroupedIdMapper<M>` (canonical ids: best live copy, per-server resolution) | Stable proxy ids `sha256("jmp1:"+server+":"+id)`, merged views. |
-| `IdStore` / `SiblingStore` / `SessionStore` / `IndexStore` (`Store`) | `store` | `SqliteStore`, `MemoryStore` | Durable state: id mappings, series sibling links, sessions, crawled catalog per server, canonical ids, merged views. Loaded at startup into the in-memory tables, which write new entries through. |
+| `IdStore` / `SiblingStore` / `SessionStore` / `IndexStore` / `UserDataStore` (`Store`) | `store` | `SqliteStore`, `MemoryStore` | Durable state: id mappings, series sibling links, sessions, crawled catalog per server, canonical ids, merged views, per-user item state and seed marks. Loaded at startup into the in-memory tables, which write new entries through. |
 | `Crawler` | `index::crawl` | `ItemsCrawler` | Reads one server's whole catalog into index `Entry`s (paged `Items?ParentId=<library>&Recursive=true`) plus its parental rating scores. |
 | `GroupingPolicy` | `index::grouping` | `ProviderGrouping` | Which copies are the same item (provider ids, name + year; seasons/episodes of grouped series by number). |
 | `CopyRanker` | `index::rank` | `PriorityRanker`, `ResolutionRanker` | Best copy of a group (`[index] prefer`). |
 | `GroupLookup` | `index::groups` | `CanonicalGroups` (lock-free, published per rebuild) | Canonical id and members of a group, on the request path. |
+| `WatchState` | `userdata` | `UserDataTable` (in memory, written through to a `UserDataStore`), `MeteredWatchState<W>` | Per proxy user, per canonical item state (played, play count, position, favourite, likes, rating, last played). |
 | `MergeStrategy` | `merge` | `MergeByNameAndType`, `KeepSeparate` | Groups libraries across servers (`[merge].merge_libraries_by_name`). |
 | `Deduplicator` | `merge` | `NoDedupe`, `ProviderIdDeduplicator`, `NameDeduplicator`, `MeteredDeduplicator<D>` | Removes duplicate items across servers in merged lists. |
 | `CatalogCache` | `cache` | `NoCache`, `MemoryCatalogCache` (TTL + max entries), `DiskCatalogCache` (memory + JSON file), `MeteredCache<C>` | Caches per-server library views (`[cache]`). |
 | `ConfigSource` | `reload` | `FileConfigSource`, `StaticConfigSource` | Where the config comes from. |
 | `ConfigWatcher` | `reload` | `PollingWatcher` (mtime + size of config + TLS files, default every 3 s), `SighupWatcher` | What triggers a reload; run via `reload::spawn_watcher`. |
-| `Reloadable` | `reload` | `BackendManager` (the server set; each `MediaBackend` applies its own in-place changes), `MeteredAuthenticator` (users), `SessionPruner`, `LogFilter`, `ListenerTls`, `CatalogCacheReload`, `RestartNotices` | Two-phase hot reload through `ReloadHub`: every subscriber validates, then every subscriber applies. A failed validation keeps the old config. |
+| `Reloadable` | `reload` | `BackendManager` (the server set; each `MediaBackend` applies its own in-place changes), `MeteredAuthenticator` (users), `SessionPruner`, `LogFilter`, `ListenerTls`, `CatalogCacheReload`, `UserDataService`, `RestartNotices` | Two-phase hot reload through `ReloadHub`: every subscriber validates, then every subscriber applies. A failed validation keeps the old config. |
 | `TlsProvider` | `tls` | `RustlsProvider` | Listener and upstream rustls configs, certificate expiry. |
-| `ResponseRewriter` | `rewrite`, `index::canonical` | `JsonIdRewriter`, `HlsPlaylistRewriter`, `LocationHeaderRewriter`, `CanonicalIdRewriter` (member ids → canonical ids, except `MediaSources`), `MeteredRewriter<R>` | Ordered `RewriteChain` applied to upstream responses (ids, playlist URLs, redirects). |
-| `Endpoint` | `endpoints` | `Route` (pattern + `Access` + handler fn) | Ordered `Registry`; modules `system`, `users`, `library`, `sessions`, `compat`, `fallback`. A handler may return `Flow::Next` to defer to the next match. |
+| `ResponseRewriter` | `rewrite`, `index::canonical` | `JsonIdRewriter`, `HlsPlaylistRewriter`, `LocationHeaderRewriter`, `CanonicalIdRewriter` (member ids → canonical ids, except `MediaSources`), `UserDataOverlay` (every `UserData` → the proxy user's), `MeteredRewriter<R>` | Ordered `RewriteChain` applied to upstream responses (ids, playlist URLs, redirects). |
+| `Endpoint` | `endpoints` | `Route` (pattern + `Access` + handler fn) | Ordered `Registry`; modules `system`, `users`, `library`, `sessions`, `userdata`, `compat`, `fallback`. A handler may return `Flow::Next` to defer to the next match. |
 | `SecretCipher` | `secrets` | `XChaCha20Cipher` | Encrypts and decrypts upstream passwords and API keys with authenticated encryption (XChaCha20-Poly1305 AEAD). Encrypted values are prefixed `enc:v1:<base64>`. |
 | `KeyStore` | `secrets` | `DefaultKeyStore` | Manages the encryption key: reads from `JMP_SECRET_KEY` env var, or `/var/lib/jmp/secret.key` file, or auto-generates (with 0600 permissions) on first run. |
 
@@ -92,6 +93,34 @@ request: IndexQuery::parse (Err = unsupported ⇒ live fan-out) ─► run (filt
   instead (`outcome="unsupported"`, the reason is logged at debug).
 * Schema: migration `0002_index.sql` (`user_version` 2) adds
   `index_servers`, `index_entries`, `canonical_ids`, `merged_views`.
+
+## Per-user state (`src/userdata/`)
+
+```
+client ─► UserPlayedItems / UserFavoriteItems / UserItems/{id}/Rating|UserData
+          Sessions/Playing{,/Progress,/Stopped}
+        ─► UserDataService (key = canonical id via GroupLookup; rules::* = Jellyfin's
+           play-state transitions with [userdata] resume thresholds)
+             ├─ WatchState (MeteredWatchState<UserDataTable>) ─► UserDataStore (user_data)
+             └─ write-through: the original request forwarded to every live copy's server
+reads:  UserDataOverlay (response rewriter) ─► view::dto (series/season: aggregate of episodes)
+        IndexQuery::run(user = UserDataService::fact) ─► IsPlayed/IsFavorite/IsResumable/Likes,
+                                                          SortBy=DatePlayed/PlayCount, Resume
+        nextup::next_up(Snapshot, live, state)      ─► Shows/NextUp (one entry per canonical series)
+Seeder (every 10 s): once per (proxy user, server) import Filters=IsPlayed|IsResumable|IsFavorite|
+        Likes|Dislikes from the upstream account; copies merged; never overwrites proxy state
+```
+
+* State is keyed by the canonical id, so the copies of a movie share one
+  state and the episodes of a show split across servers are one list.
+* A series or season has no stored played state: it is played when every
+  episode is, with `UnplayedItemCount` and `PlayedPercentage`; marking it
+  played/unplayed marks its episodes (as Jellyfin does).
+* NextUp follows Jellyfin's `TVSeriesManager`: per series, the first
+  unplayed regular episode after the furthest played one; series ordered by
+  last played; with `SeriesId` and nothing played, the first episode.
+* Schema: migration `0003_userdata.sql` (`user_version` 3) adds
+  `user_data(user_id, item_id, state JSON)` and `user_data_seeded`.
 
 ## Secret management (`src/secrets.rs`, `src/config_rewrite.rs`)
 
@@ -183,5 +212,6 @@ Secret types redact in `Debug` and `Display`, and are zeroized on drop
 
 `ReloadHub` subscribers, in order: backends (`BackendManager`) → users →
 sessions (drops sessions of removed users) → log filter → listener TLS →
-catalog cache (re-tune; full purge only when `[merge]` changed) → restart
+catalog cache (re-tune; full purge only when `[merge]` changed) → per-user
+state (`[userdata]`) → restart
 notices (warns about changes such as `listen` that need a restart).

@@ -82,17 +82,34 @@ rustls (no OpenSSL), tracing, metrics + Prometheus exporter.
   rating score, `CriticRating`, `Runtime`, ...; missing values sort first
   ascending like Jellyfin). Only the requested page is fetched live from
   the owning servers (in the client's `Fields`). A query using a parameter
-  the index does not know falls back to live fan-out, as do `Latest`,
-  `Resume`, `NextUp` and search hints: they go to all relevant upstreams
-  with `StartIndex=0&Limit=min(StartIndex+Limit, fanout_limit)`, then the
-  proxy merges, de-duplicates, sorts and pages.
+  the index does not know falls back to live fan-out, as do `Latest` and
+  search hints: they go to all relevant upstreams with
+  `StartIndex=0&Limit=min(StartIndex+Limit, fanout_limit)`, then the proxy
+  merges, de-duplicates, sorts and pages.
+* **Per-user state** (`[userdata]`, on by default). Played, play count,
+  resume position, favourite, likes, rating and last played date are kept
+  by the proxy for each proxy user in `jmp.db`, keyed by the canonical item,
+  so two proxy users sharing an upstream account have independent state and
+  an episode has one state whichever copy was played. Every item's
+  `UserData` in every response is the proxy user's; a series or season is
+  played when all its episodes are (with `UnplayedItemCount`). Per-user
+  filters and sorts (`IsPlayed`, `IsFavorite`, `Filters=IsResumable|Likes|
+  Dislikes|IsFavoriteOrLikes`, `SortBy=DatePlayed|PlayCount|IsFavoriteOrLiked`),
+  `UserItems/Resume` and `Shows/NextUp` are answered from the index with
+  this state, so a show split across servers has exactly one next episode.
+  Playback reports update it with Jellyfin's resume rules (`min_resume_pct`,
+  `max_resume_pct`, `min_resume_duration_secs`), and `UserPlayedItems`,
+  `UserFavoriteItems`, `UserItems/{id}/Rating` and `UserItems/{id}/UserData`
+  are answered by the proxy. With `write_through` each change is also sent
+  to every server holding a copy. With `seed_from_upstream` the state each
+  upstream account already has is imported once per (proxy user, server).
 * **Shows split across servers.** With `dedupe`, a series on several servers
   is listed once, and its other copies are remembered as *siblings*
   (also in `data_dir/jmp.db`). Its seasons and episodes (`/Shows/{id}/Seasons`,
   `/Shows/{id}/Episodes`, `/Items?ParentId=`) fan out to every copy and merge
   by season / episode number, so S01 from one server and S02 from another
-  browse as one show. Each episode still plays from (and records watch state
-  on) the server that has it.
+  browse as one show. Each episode still plays from the server that has it;
+  its watch state is the proxy's (see *Per-user state*).
 * **Playback.** `PlaybackInfo`, direct streams, HLS playlists and segments,
   images, subtitles and playstate reports go to the owning upstream. Response
   bodies are streamed through without buffering, `Range` is passed through,
@@ -310,6 +327,8 @@ Sections:
 | `[[user]]` | `name`, `password` (plaintext, `{ plain = ".." }`, `{ argon2 = ".." }` or a bare `$argon2id$...` string) |
 | `[[server]]` (alias `[[upstream]]`) | `name`, `server` (base URL, sub-path allowed), `user` + `password`, or `api_key` (+ `user` or `user_id`), `priority` (lower wins in dedupe; default = position), `enabled`, optional `[server.tls]` |
 | `[merge]` | `merge_libraries_by_name`, `dedupe`, `dedupe_types`, `label_colliding_libraries`, `fanout_limit` |
+| `[index]` | `enabled`, `refresh_interval_secs` (default 600), `page_size` (default 500), `prefer` (`priority`\|`resolution`) |
+| `[userdata]` | `enabled`, `write_through`, `seed_from_upstream` (all default true), `min_resume_pct` (5), `max_resume_pct` (90), `min_resume_duration_secs` (300) |
 | `[cache]` | `enabled`, `ttl_secs`, `refresh_interval_secs`, `max_entries`, `serve_stale_on_error`, `persist_path` |
 | `[tls]` | `cert_path`, `key_path`, `min_version`, `client_auth`, `client_ca_path`, `http2`, `redirect_http_listen` |
 | `[upstream_tls]` | defaults for all upstreams: `ca_path`, `insecure_skip_verify`, `client_cert_path`, `client_key_path`, `min_version`, `server_name` |
@@ -548,7 +567,9 @@ Changes that still need a restart (logged as a warning): `[proxy] listen`,
 changing its redirect port, `[metrics]` listen/path/enabled, `[debug]`
 path/enabled, `[cache] enabled`/`persist_path`, `[index] page_size`,
 `[logging] format`/`ansi`. The other `[index]` settings apply on reload
-(the snapshot is rebuilt within seconds).
+(the snapshot is rebuilt within seconds), and all of `[userdata]` applies
+at once (turning it off makes clients see the upstream accounts' state
+again; the proxy's state is kept in `jmp.db` for when it is turned back on).
 
 Metrics: `jmp_config_upstream_changes_total{change="added|removed|rebuilt|changed"}`,
 `jmp_servers_active`, `jmp_servers_draining`,
@@ -571,7 +592,9 @@ Answered by the proxy itself:
 | `GET /UserViews`, `/Users/{u}/Views` | merged libraries |
 | `GET /Items/{view}`, `/Users/{u}/Items/{view}`, view images | merged view DTO / primary image of a member library |
 | `GET /Items`, `/Users/{u}/Items` | fan-out (or routed to the owning upstream for `ParentId`), merge, dedupe, sort, page |
-| `GET /Items/Latest`, `/UserItems/Resume`, `/Shows/NextUp`, `/Search/Hints`, `/Genres`, `/Studios`, `/Persons`, `/Artists`, ... | fan-out lists |
+| `GET /Items/Latest`, `/Search/Hints`, `/Artists`, `/MusicGenres`, ... | fan-out lists |
+| `GET /UserItems/Resume`, `/Shows/NextUp` | from the index and per-user state (`[userdata]`); fan-out while the index is cold or `[userdata]` is off |
+| `POST/DELETE /UserPlayedItems/{id}`, `/UserFavoriteItems/{id}`, `/UserItems/{id}/Rating`; `GET/POST /UserItems/{id}/UserData` (and `/Users/{u}/...` forms) | per-user state, written through to every copy (`[userdata]`); forwarded to the owner when off |
 | `GET /Shows/{id}/Seasons`, `/Shows/{id}/Episodes` | for a series that is on several servers (with `dedupe`): fan-out to every copy, seasons merged by number, episodes by season+episode number (priority winner kept); otherwise routed to the owner |
 | `GET /Items/Filters(2)`, `/Items/Counts` | merged objects |
 | `GET/POST /Sessions*`, `/Sessions/Playing/Ping`, `/DisplayPreferences/{id}`, `/SyncPlay/*`, `/Plugins`, ... | local stubs |
@@ -582,7 +605,7 @@ Routed to the owning upstream by the proxy id in the path/query/body:
 `/Items/{id}/Images/*`, `/Items/{id}/PlaybackInfo`, `/Videos/{id}/*`,
 `/Audio/{id}/*` (direct and HLS: `master.m3u8`, `main.m3u8`, segments;
 playlists rewritten), subtitles, `/Sessions/Playing{,/Progress,/Stopped}`
-(routed by `ItemId`), `/UserPlayedItems/{id}`, `/UserFavoriteItems/{id}`, and
+(routed by `ItemId`; also recorded in the proxy's per-user state), and
 legacy `/Users/{u}/...` forms (translated). Anything else without a known id
 goes to the primary upstream or returns empty, per `unknown_routes`, and is
 logged at debug with its route template.
@@ -716,19 +739,23 @@ Bugs it found have regression tests in `tests/real_jellyfin_regressions.rs`.
 ## Limitations
 
 * **Tested against real Jellyfin servers, not real client apps.** The
-  real-server suite (Jellyfin 12.3.0) issues the HTTP calls a client makes
+  real-server suite (Jellyfin 12.4.0) issues the HTTP calls a client makes
   with curl; no TV, phone or desktop app has been tried, so no
   client-compatibility claims are made.
 * **Shared upstream identity.** All proxy users use the same upstream
-  account per server, so watch state, favourites, resume points and parental
-  controls are shared between proxy users.
-* **Per-user filters and sorts** (`IsPlayed`, `IsFavorite`, `Filters=IsResumable`,
-  `SortBy=DatePlayed`/`PlayCount`, ...) are not answered from the index yet;
-  they fall back to live fan-out with approximate totals/paging (bounded by
-  `fanout_limit`) and sorting from DTO JSON. `Latest`, `Resume`, `NextUp`
-  and search hints always fan out.
-* **Split shows:** watch state stays per server, so `NextUp` for a show
-  split across servers can list one next episode per server.
+  account per server. Watch state is kept per proxy user by the proxy
+  (`[userdata]`), but the upstream account's own state (what the servers'
+  native clients see, and what `write_through` updates) is shared, parental
+  controls are the upstream account's, and a proxy user added later imports
+  (`seed_from_upstream`) whatever that shared account has watched by then.
+* **Per-user state needs the index.** While the index is cold (first crawl
+  of a new server) per-user filters, `Resume` and `NextUp` fall back to live
+  fan-out, which filters on the upstream account's state. Items the index
+  does not hold (music, playlists, collections) carry their own proxy state
+  but no aggregated folder counts. `Latest` is fan-out and hides items by the
+  upstream account's played state. `NextUp`'s `EnableRewatching` is ignored.
+* **Playback reports for items outside the index** (unknown runtime) keep
+  the position but never mark the item played on stop.
 * **Index freshness:** items added upstream appear after the next crawl
   (`[index] refresh_interval_secs`, default 10 min); until then they are
   only visible through fan-out endpoints. While a live server has never been
