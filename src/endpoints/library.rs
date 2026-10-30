@@ -93,6 +93,9 @@ async fn items(st: &Shared, r: Req, c: &Client) -> HandlerResult {
         let n = v.len();
         return done(ok_json(dto::query_result(v, n, 0)));
     }
+    if let Some(res) = proxy::indexed_items(st, &r, c, "items", &r.query).await {
+        return done(res?);
+    }
     done(proxy::fan_list(st, &r, c, &proxy::ITEMS).await?)
 }
 
@@ -109,6 +112,9 @@ async fn nextup(st: &Shared, r: Req, c: &Client) -> HandlerResult {
 }
 
 async fn seasons(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    if let Some(res) = proxy::indexed_show_children(st, &r, c, false).await {
+        return done(res?);
+    }
     match proxy::show_children(st, &r, c, &proxy::SEASONS).await {
         Some(res) => done(res?),
         None => Ok(Flow::Next(r)),
@@ -116,6 +122,9 @@ async fn seasons(st: &Shared, r: Req, c: &Client) -> HandlerResult {
 }
 
 async fn episodes(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    if let Some(res) = proxy::indexed_show_children(st, &r, c, true).await {
+        return done(res?);
+    }
     match proxy::show_children(st, &r, c, &proxy::EPISODES).await {
         Some(res) => done(res?),
         None => Ok(Flow::Next(r)),
@@ -127,6 +136,11 @@ async fn search(st: &Shared, r: Req, c: &Client) -> HandlerResult {
 }
 
 async fn named(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    if let Some(kind) = r.segs.first().and_then(|s| proxy::name_kind(s)) {
+        if let Some(res) = proxy::indexed_names(st, &r, kind).await {
+            return done(res?);
+        }
+    }
     let spec = ListSpec {
         path: r.segs.clone(),
         ..proxy::NAMED
@@ -135,6 +149,13 @@ async fn named(st: &Shared, r: Req, c: &Client) -> HandlerResult {
 }
 
 async fn filters(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    let v2 = r
+        .segs
+        .get(1)
+        .is_some_and(|s| s.eq_ignore_ascii_case("filters2"));
+    if let Some(res) = proxy::indexed_filters(st, &r, v2).await {
+        return done(res?);
+    }
     done(proxy::fan_merge_objects(st, &r, c, false).await?)
 }
 

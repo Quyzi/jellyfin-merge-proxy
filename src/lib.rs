@@ -78,6 +78,8 @@ pub struct AppState {
     pub servers: Arc<ServerRegistry>,
     pub backend_factory: Arc<dyn BackendFactory>,
     pub ids: Arc<dyn IdMapper>,
+    /// The canonical catalog index.
+    pub index: Arc<index::service::IndexService>,
     /// Copies of one series/season on several servers.
     pub siblings: Arc<siblings::SiblingTable>,
     pub sessions: Arc<auth::Sessions>,
@@ -156,8 +158,24 @@ impl AppState {
         };
         let table = ids::HashedIdTable::new(registry.clone()).with_store(store.clone())?;
         let sessions = auth::Sessions::with_store(store.clone())?;
-        let siblings = siblings::SiblingTable::new().with_store(store)?;
-        let ids: Arc<dyn IdMapper> = Arc::new(ids::MeteredIdMapper::new(table, registry.clone()));
+        let siblings = siblings::SiblingTable::new().with_store(store.clone())?;
+        let groups = Arc::new(index::groups::CanonicalGroups::new());
+        let table = ids::PersistentViews::load(table, registry.clone(), store.clone())?;
+        let grouped = Arc::new(ids::GroupedIdMapper::new(
+            ids::MeteredIdMapper::new(table, registry.clone()),
+            groups.clone(),
+        ));
+        let ids: Arc<dyn IdMapper> = grouped.clone();
+        let index = Arc::new(index::service::IndexService::new(
+            store,
+            registry.clone(),
+            groups.clone(),
+            cfg.index.page_size,
+        ));
+        let mut rewriters = opts.rewriters.unwrap_or_default();
+        rewriters.push(Box::new(rewrite::MeteredRewriter(
+            index::canonical::CanonicalIdRewriter::new(groups),
+        )));
         let sessions = Arc::new(sessions);
         let auth = Arc::new(users::MeteredAuthenticator(
             users::TomlAuthenticator::from_config(&cfg),
@@ -172,6 +190,10 @@ impl AppState {
 
         // Reload subscribers, in apply order.
         let backends = Arc::new(ArcSwap::from_pointee(BackendSet::new(backends)));
+        let live = backends.clone();
+        grouped.set_liveness(Arc::new(move |s| {
+            live.load().get(s).is_some_and(|b| !b.is_down())
+        }));
         let hub = ReloadHub::default();
         hub.subscribe(Arc::new(BackendManager::new(
             backends.clone(),
@@ -197,12 +219,13 @@ impl AppState {
             servers: registry,
             backend_factory: factory,
             ids,
+            index,
             siblings: Arc::new(siblings),
             sessions,
             authenticator: auth,
             catalog,
             views_refresh: tokio::sync::Mutex::new(()),
-            rewriters: opts.rewriters.unwrap_or_default(),
+            rewriters,
             endpoints: opts
                 .endpoints
                 .unwrap_or_else(endpoints::Registry::default_jellyfin),
@@ -272,7 +295,8 @@ impl AppState {
     }
 
     /// Log into all backends in the background (failures are only logged),
-    /// and start the catalog refresher if `cache.refresh_interval_secs > 0`.
+    /// and start the catalog refresher if `cache.refresh_interval_secs > 0`
+    /// and the catalog index crawler.
     pub fn spawn_initial_logins(self: &Shared) {
         for u in self.backends().iter() {
             let u = u.clone();
@@ -283,6 +307,7 @@ impl AppState {
             });
         }
         let weak = Arc::downgrade(self);
+        self.index.spawn(weak.clone());
         tokio::spawn(async move {
             loop {
                 let secs = match weak.upgrade() {

@@ -167,6 +167,12 @@ pub async fn fan_list_on(
         removed += stats.removed;
         link_siblings(st, &stats, &["Season"]);
     }
+    if fanout {
+        // Copies the index grouped carry the same canonical id by now.
+        let (a, n) = dedupe_by_id(all);
+        all = a;
+        removed += n;
+    }
     if fanout && spec.dedupe_by_name {
         let _s = Stage::start("dedupe");
         let d = MeteredDeduplicator::new(merge::NameDeduplicator, &server_names);
@@ -196,6 +202,39 @@ pub async fn fan_list_on(
         Shape::SearchHints => ok_json(json!({"SearchHints": items, "TotalRecordCount": total})),
         Shape::Array => ok_json(Value::Array(items)),
     })
+}
+
+/// Drop items whose `Id` was already seen, keeping the best-priority copy
+/// (first in server order on ties). Returns the kept items and how many
+/// were dropped.
+pub(super) fn dedupe_by_id(all: Vec<Ranked>) -> (Vec<Ranked>, usize) {
+    let mut best: std::collections::HashMap<String, usize> = Default::default();
+    let mut keep = vec![true; all.len()];
+    for (i, r) in all.iter().enumerate() {
+        let Some(id) = r.item.get("Id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        match best.get(id).copied() {
+            Some(j) if r.priority < all[j].priority => {
+                keep[j] = false;
+                best.insert(id.to_string(), i);
+            }
+            Some(_) => keep[i] = false,
+            None => {
+                best.insert(id.to_string(), i);
+            }
+        }
+    }
+    let removed = keep.iter().filter(|k| !**k).count();
+    if removed > 0 {
+        counter!(names::DEDUPE_DROPPED, "key" => "canonical").increment(removed as u64);
+    }
+    let out = all
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(r, k)| k.then_some(r))
+        .collect();
+    (out, removed)
 }
 
 /// Fan out a request returning an object and merge the objects:
