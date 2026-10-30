@@ -3,10 +3,11 @@
 use axum::http::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
-#[derive(Clone, Serialize, Deserialize)]
+use crate::store::{SessionStore, StoreError};
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub token: String,
     pub session_id: String,
@@ -62,29 +63,23 @@ impl Session {
 
 pub struct Sessions {
     map: RwLock<HashMap<String, Session>>,
-    path: Option<PathBuf>,
+    store: Arc<dyn SessionStore>,
 }
 
 impl Sessions {
-    pub fn new(path: Option<PathBuf>) -> Self {
-        let mut map = HashMap::new();
-        if let Some(p) = &path {
-            if let Ok(text) = std::fs::read_to_string(p) {
-                if let Ok(list) = serde_json::from_str::<Vec<Session>>(&text) {
-                    for s in list {
-                        map.insert(s.token.clone(), s);
-                    }
-                }
-            }
-        }
-        if path.is_some() {
-            metrics::counter!(crate::telemetry::names::PERSIST_OPS, "store" => "sessions", "op" => "load", "outcome" => "success").increment(1);
-        }
+    /// Sessions loaded from `store`; every change is written through to it.
+    pub fn with_store(store: Arc<dyn SessionStore>) -> Result<Self, StoreError> {
+        let map: HashMap<_, _> = store
+            .load_sessions()?
+            .into_iter()
+            .map(|s| (s.token.clone(), s))
+            .collect();
+        metrics::counter!(crate::telemetry::names::PERSIST_OPS, "store" => "sessions", "op" => "load", "outcome" => "success").increment(1);
         metrics::gauge!(crate::telemetry::names::SESSIONS_ACTIVE).set(map.len() as f64);
-        Sessions {
+        Ok(Sessions {
             map: RwLock::new(map),
-            path,
-        }
+            store,
+        })
     }
 
     pub fn list(&self) -> Vec<RedactedSession> {
@@ -104,22 +99,22 @@ impl Sessions {
         self.len() == 0
     }
 
-    fn save(&self) {
+    /// Write one change through to the store (if any) and count it.
+    fn persist(&self, write: impl FnOnce(&dyn SessionStore) -> Result<(), StoreError>) {
         metrics::gauge!(crate::telemetry::names::SESSIONS_ACTIVE).set(self.len() as f64);
-        if let Some(p) = &self.path {
-            let list: Vec<Session> = self.map.read().unwrap().values().cloned().collect();
-            if let Ok(text) = serde_json::to_string_pretty(&list) {
-                let tmp = p.with_extension("tmp");
-                let ok = std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, p).is_ok();
-                let outcome = if ok { "success" } else { "error" };
-                metrics::counter!(crate::telemetry::names::PERSIST_OPS, "store" => "sessions", "op" => "save", "outcome" => outcome).increment(1);
+        let outcome = match write(self.store.as_ref()) {
+            Ok(()) => "success",
+            Err(e) => {
+                tracing::warn!("saving sessions failed: {e}");
+                "error"
             }
-        }
+        };
+        metrics::counter!(crate::telemetry::names::PERSIST_OPS, "store" => "sessions", "op" => "save", "outcome" => outcome).increment(1);
     }
 
     pub fn insert(&self, s: Session) {
-        self.map.write().unwrap().insert(s.token.clone(), s);
-        self.save();
+        self.map.write().unwrap().insert(s.token.clone(), s.clone());
+        self.persist(|st| st.put_session(&s));
     }
 
     pub fn get(&self, token: &str) -> Option<Session> {
@@ -128,16 +123,20 @@ impl Sessions {
 
     pub fn remove(&self, token: &str) {
         self.map.write().unwrap().remove(token);
-        self.save();
+        self.persist(|st| st.remove_sessions(&[token.to_string()]));
     }
 
     /// Drop sessions whose user no longer exists in the config.
     pub fn retain_users(&self, valid_ids: &[String]) {
-        self.map
-            .write()
-            .unwrap()
-            .retain(|_, s| valid_ids.contains(&s.user_id));
-        self.save();
+        let mut removed = Vec::new();
+        self.map.write().unwrap().retain(|token, s| {
+            let keep = valid_ids.contains(&s.user_id);
+            if !keep {
+                removed.push(token.clone());
+            }
+            keep
+        });
+        self.persist(|st| st.remove_sessions(&removed));
     }
 }
 
@@ -294,5 +293,21 @@ mod tests {
         let i = client_auth(&h, &[]);
         assert_eq!(i["client"], "Jellyfin Web");
         assert!(!i.contains_key("token"));
+    }
+
+    #[test]
+    fn sessions_write_through_to_the_store() {
+        use crate::store::{tests::session, MemoryStore, SessionStore};
+        let store = Arc::new(MemoryStore::new());
+        let s = Sessions::with_store(store.clone()).unwrap();
+        s.insert(session("t1", "alice"));
+        s.insert(session("t2", "bob"));
+        s.insert(session("t3", "bob"));
+        s.remove("t2");
+        s.retain_users(&["alice".to_string()]);
+        assert_eq!(store.load_sessions().unwrap(), vec![session("t1", "alice")]);
+        let again = Sessions::with_store(store).unwrap();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again.get("t1").unwrap().user_id, "alice");
     }
 }

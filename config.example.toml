@@ -1,5 +1,5 @@
 # jellyfin-merge-proxy example configuration.
-# Copy to ./config/config.toml (docker) or point JMP_CONFIG / --config at it.
+# Copy to /etc/jmp.toml (the default; docker: bind-mount it there) or point JMP_CONFIG / --config at it.
 
 # ---------------------------------------------------------------------------
 # The proxy itself (the virtual server clients see).
@@ -15,8 +15,8 @@ name = "Jellyfin Merge Proxy"
 # id = "4a1f0c2e9b7d4e6f8a3c5b1d2e7f9a0c"
 # Jellyfin version reported to clients (clients gate features on it).
 reported_version = "10.10.7"
-# Where the id lookup table (ids.tsv), client sessions (sessions.json),
-# catalog cache, and auto-generated secret key (secret.key) are stored.
+# Where the state database (jmp.db: id lookup table, client sessions) and the
+# auto-generated secret key (secret.key) are stored.
 # Keep it on a volume so ids/logins/keys survive restarts.
 data_dir = "/var/lib/jmp"
 # Routes the proxy doesn't implement and that carry no known item id:
@@ -102,10 +102,10 @@ priority = 10
 
 # Per-server TLS. Every field is optional and overrides [upstream_tls].
 # [server.tls]              # applies to the [[server]] right above it
-# ca_path = "/config/certs/friend-ca.pem"   # extra trusted CA (PEM), added to the system roots
+# ca_path = "/etc/jmp/certs/friend-ca.pem"   # extra trusted CA (PEM), added to the system roots
 # server_name = "jellyfin.internal"         # verify the cert against this name instead of the URL host
-# client_cert_path = "/config/certs/proxy-client.pem"   # mTLS client certificate chain (PEM)
-# client_key_path  = "/config/certs/proxy-client.key"   # its private key (PKCS#8, PKCS#1 or SEC1 PEM)
+# client_cert_path = "/etc/jmp/certs/proxy-client.pem"   # mTLS client certificate chain (PEM)
+# client_key_path  = "/etc/jmp/certs/proxy-client.key"   # its private key (PKCS#8, PKCS#1 or SEC1 PEM)
 # min_version = "1.2"                       # "1.2" or "1.3"
 # insecure_skip_verify = false              # NEVER verify certificates. Logged as a loud warning.
 
@@ -135,7 +135,7 @@ ttl_secs = 60                  # entry lifetime; refreshed on next use after thi
 refresh_interval_secs = 0      # >0 = refresh in the background every N seconds
 max_entries = 1000             # oldest entries are evicted beyond this
 serve_stale_on_error = true    # serve an expired entry if the refresh fails
-# persist_path = "/config/data/catalog.json"   # keep the cache across restarts
+# persist_path = "/var/lib/jmp/catalog.json"   # keep the cache across restarts
 
 # ---------------------------------------------------------------------------
 # Inbound TLS (optional). Without this section the proxy serves plain HTTP.
@@ -144,11 +144,11 @@ serve_stale_on_error = true    # serve an expired entry if the refresh fails
 # stays active. Turning TLS on/off or changing `listen` needs a restart.
 # ---------------------------------------------------------------------------
 # [tls]
-# cert_path = "/config/certs/fullchain.pem"   # leaf first, then intermediates (PEM)
-# key_path  = "/config/certs/privkey.pem"     # PKCS#8, PKCS#1 (RSA) or SEC1 (EC) PEM
+# cert_path = "/etc/jmp/certs/fullchain.pem"   # leaf first, then intermediates (PEM)
+# key_path  = "/etc/jmp/certs/privkey.pem"     # PKCS#8, PKCS#1 (RSA) or SEC1 (EC) PEM
 # min_version = "1.2"                         # "1.2" (default) or "1.3"
 # client_auth = "none"                        # "none" | "optional" | "required" (mTLS)
-# client_ca_path = "/config/certs/clients-ca.pem"   # required unless client_auth = "none"
+# client_ca_path = "/etc/jmp/certs/clients-ca.pem"   # required unless client_auth = "none"
 # http2 = true                                # offer h2 via ALPN (false = HTTP/1.1 only)
 # redirect_http_listen = "0.0.0.0:8080"       # optional plain-HTTP port answering 308 -> https
 
@@ -156,9 +156,22 @@ serve_stale_on_error = true    # serve an expired entry if the refresh fails
 # Defaults for TLS connections to every [[server]] (same keys as [server.tls]).
 # ---------------------------------------------------------------------------
 # [upstream_tls]
-# ca_path = "/config/certs/homelab-ca.pem"
+# ca_path = "/etc/jmp/certs/homelab-ca.pem"
 # min_version = "1.2"
 # insecure_skip_verify = false
+
+# ---------------------------------------------------------------------------
+# State database (SQLite): id mappings, series sibling links and client
+# sessions. Restart required to change. ids.tsv, siblings.tsv and
+# sessions.json from older versions are imported on first start and renamed
+# to *.migrated.
+# ---------------------------------------------------------------------------
+[database]
+# path = "/var/lib/jmp/jmp.db"   # default: <data_dir>/jmp.db
+journal_mode = "wal"             # "wal" | "delete" | "truncate" | "persist" | "memory" | "off"
+                                 # (use "delete" on network filesystems without shared memory)
+synchronous = "normal"           # "off" | "normal" | "full" | "extra"
+busy_timeout_ms = 5000
 
 # ---------------------------------------------------------------------------
 # Logging. RUST_LOG, when set, overrides `filter`. `filter` is hot-reloaded;
