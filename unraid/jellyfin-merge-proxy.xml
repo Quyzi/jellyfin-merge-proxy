@@ -1,23 +1,16 @@
 <?xml version="1.0"?>
 <!--
   Unraid Community Applications template for jellyfin-merge-proxy.
-  PLACEHOLDERS: replace every "OWNER" below with the GitHub user/org that
-  publishes the image (ghcr.io/OWNER/jellyfin-merge-proxy) before using or
-  submitting this template. See unraid/README.md.
 -->
 <Container version="2">
   <Name>jellyfin-merge-proxy</Name>
-  <!-- PLACEHOLDER: image published by OWNER -->
-  <Repository>ghcr.io/OWNER/jellyfin-merge-proxy:latest</Repository>
-  <!-- PLACEHOLDER -->
-  <Registry>https://github.com/OWNER/jellyfin-merge-proxy/pkgs/container/jellyfin-merge-proxy</Registry>
+  <Repository>ghcr.io/quyzi/jellyfin-merge-proxy:latest</Repository>
+  <Registry>https://github.com/Quyzi/jellyfin-merge-proxy/pkgs/container/jellyfin-merge-proxy</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Privileged>false</Privileged>
-  <!-- PLACEHOLDER -->
-  <Support>https://github.com/OWNER/jellyfin-merge-proxy/issues</Support>
-  <!-- PLACEHOLDER -->
-  <Project>https://github.com/OWNER/jellyfin-merge-proxy</Project>
+  <Support>https://github.com/Quyzi/jellyfin-merge-proxy/issues</Support>
+  <Project>https://github.com/Quyzi/jellyfin-merge-proxy</Project>
   <Overview>Merges several Jellyfin servers into one. TV and phone apps connect to the proxy as if it were a single Jellyfin server and see the libraries of all configured servers combined (same-named libraries merged, optional de-duplication of movies and shows). Playback, HLS transcoding and watch state go to the server that owns each item. Users and upstream servers are configured in /etc/jmp.toml; on first start, if that file is missing, the container writes jmp.example.toml next to it and stops with instructions. Plain HTTP by default; TLS (inbound or to the upstream servers) is optional. Data (id map, sessions, catalog cache, auto-generated secret key) lives in /var/lib/jmp.</Overview>
   <Category>MediaServer:Video Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:8096]/web/</WebUI>

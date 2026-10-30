@@ -1,0 +1,36 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create jmp system user if it doesn't exist
+        if ! getent passwd jmp >/dev/null; then
+            useradd --system --home-dir /var/lib/jmp --no-create-home \
+                    --shell /usr/sbin/nologin --comment "Jellyfin Merge Proxy" jmp
+        fi
+
+        # Ensure data directory exists with correct ownership
+        mkdir -p /var/lib/jmp
+        chown jmp:jmp /var/lib/jmp
+        chmod 700 /var/lib/jmp
+
+        # Ensure config file is writable by jmp user (for secret rewriting)
+        # Set to jmp:jmp with 640 so jmp can write, root can read
+        if [ -f /etc/jmp.toml ]; then
+            chown jmp:jmp /etc/jmp.toml
+            chmod 640 /etc/jmp.toml
+        fi
+
+#DEBHELPER#
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

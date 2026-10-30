@@ -1,0 +1,64 @@
+[Unit]
+Description=Jellyfin Merge Proxy
+Documentation=https://github.com/Quyzi/jellyfin-merge-proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jmp
+Group=jmp
+
+# Configuration and data paths
+Environment=JMP_CONFIG=/etc/jmp.toml
+StateDirectory=jmp
+StateDirectoryMode=0700
+
+# Allow writing to config (for secret rewriting) and data directory
+ReadWritePaths=/etc/jmp.toml /var/lib/jmp
+
+# Binary
+ExecStart=/usr/bin/jellyfin-merge-proxy
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+# Exit status 2 = configuration error (e.g. the packaged minimal /etc/jmp.toml
+# without [[user]]/[[server]]): fail once with the message instead of looping.
+RestartPreventExitStatus=2
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+PrivateDevices=true
+DevicePolicy=closed
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0077
+RemoveIPC=true
+
+# Resource limits
+TasksMax=512
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

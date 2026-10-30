@@ -78,3 +78,78 @@ strip = true
 opt-level = 3
 [profile.dev.package.blake2]
 opt-level = 3
+
+# Debian package metadata
+[package.metadata.deb]
+maintainer = "Jellyfin Merge Proxy Contributors"
+copyright = "2024, Jellyfin Merge Proxy Contributors"
+license-file = "LICENSE"
+extended-description = """\
+HTTP proxy that merges several Jellyfin servers into one virtual Jellyfin server. \
+Supports hot-reloading, catalog caching, transparent id mapping, and more."""
+depends = "$auto, systemd"
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/jellyfin-merge-proxy", "/usr/bin/", "755"],
+    ["config.minimal.toml", "/etc/jmp.toml", "640"],
+    ["config.example.toml", "/usr/share/doc/jellyfin-merge-proxy/config.example.toml", "644"],
+    ["README.md", "/usr/share/doc/jellyfin-merge-proxy/README.md", "644"],
+    ["jellyfin-merge-proxy.service", "/usr/lib/systemd/system/", "644"],
+]
+conf-files = ["/etc/jmp.toml"]
+maintainer-scripts = "debian/"
+
+[package.metadata.deb.systemd-units]
+unit-name = "jellyfin-merge-proxy"
+enable = false
+restart-after-upgrade = true
+stop-on-upgrade = false
+
+# RPM package metadata
+[package.metadata.generate-rpm]
+auto-req = "no"
+# The user must exist before the files are unpacked, so that /etc/jmp.toml
+# gets jmp:jmp from the package itself (no "user jmp does not exist" warning,
+# and `rpm -V` stays clean).
+pre_install_script = """
+if ! getent passwd jmp >/dev/null 2>&1; then
+    useradd --system --user-group --home-dir /var/lib/jmp --no-create-home \
+            --shell /usr/sbin/nologin --comment "Jellyfin Merge Proxy" jmp
+fi
+"""
+post_install_script = """
+mkdir -p /var/lib/jmp
+chown jmp:jmp /var/lib/jmp
+chmod 700 /var/lib/jmp
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+"""
+# $1 is the number of installed instances left: 0 = erase, >= 1 = upgrade.
+pre_uninstall_script = """
+if [ "$1" = 0 ] && [ -d /run/systemd/system ]; then
+    systemctl disable --now jellyfin-merge-proxy.service || true
+fi
+"""
+# On upgrade restart a running service with the new binary. On erase keep the
+# jmp user and /var/lib/jmp: it holds secret.key, without which the enc:v1:
+# values in the (kept) config cannot be decrypted.
+post_uninstall_script = """
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+    if [ "$1" -ge 1 ]; then
+        systemctl try-restart jellyfin-merge-proxy.service || true
+    fi
+fi
+"""
+assets = [
+    { source = "target/release/jellyfin-merge-proxy", dest = "/usr/bin/jellyfin-merge-proxy", mode = "755" },
+    { source = "config.minimal.toml", dest = "/etc/jmp.toml", mode = "640", config = "noreplace", user = "jmp", group = "jmp" },
+    { source = "config.example.toml", dest = "/usr/share/doc/jellyfin-merge-proxy/config.example.toml", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/jellyfin-merge-proxy/README.md", mode = "644" },
+    { source = "jellyfin-merge-proxy.service", dest = "/usr/lib/systemd/system/jellyfin-merge-proxy.service", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+systemd = "*"
