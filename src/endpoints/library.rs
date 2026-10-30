@@ -104,10 +104,16 @@ async fn latest(st: &Shared, r: Req, c: &Client) -> HandlerResult {
 }
 
 async fn resume(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    if let Some(res) = proxy::indexed_resume(st, &r, c).await {
+        return done(res?);
+    }
     done(proxy::fan_list(st, &r, c, &proxy::RESUME).await?)
 }
 
 async fn nextup(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+    if let Some(res) = proxy::indexed_nextup(st, &r, c).await {
+        return done(res?);
+    }
     done(proxy::fan_list(st, &r, c, &proxy::NEXTUP).await?)
 }
 
@@ -137,7 +143,7 @@ async fn search(st: &Shared, r: Req, c: &Client) -> HandlerResult {
 
 async fn named(st: &Shared, r: Req, c: &Client) -> HandlerResult {
     if let Some(kind) = r.segs.first().and_then(|s| proxy::name_kind(s)) {
-        if let Some(res) = proxy::indexed_names(st, &r, kind).await {
+        if let Some(res) = proxy::indexed_names(st, &r, c, kind).await {
             return done(res?);
         }
     }
@@ -153,7 +159,7 @@ async fn filters(st: &Shared, r: Req, c: &Client) -> HandlerResult {
         .segs
         .get(1)
         .is_some_and(|s| s.eq_ignore_ascii_case("filters2"));
-    if let Some(res) = proxy::indexed_filters(st, &r, v2).await {
+    if let Some(res) = proxy::indexed_filters(st, &r, c, v2).await {
         return done(res?);
     }
     done(proxy::fan_merge_objects(st, &r, c, false).await?)
