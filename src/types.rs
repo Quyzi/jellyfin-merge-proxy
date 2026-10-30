@@ -59,6 +59,14 @@ macro_rules! hex_id {
             }
         }
 
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let s = String::deserialize(d)?;
+                $name::parse(&s)
+                    .ok_or_else(|| serde::de::Error::custom(format!("invalid id {s:?}")))
+            }
+        }
+
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str(&self.0)
