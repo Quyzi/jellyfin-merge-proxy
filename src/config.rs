@@ -12,6 +12,8 @@
 //! impl redacts.
 
 use crate::error::ConfigError;
+use crate::secrets::KeyStore;
+use metrics::counter;
 use serde::Deserialize;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -32,6 +34,20 @@ impl Secret {
     }
     pub fn expose(&self) -> &str {
         &self.0
+    }
+    pub fn is_encrypted(&self) -> bool {
+        self.0.starts_with("enc:v1:")
+    }
+    /// Decrypt if encrypted, otherwise return plaintext.
+    pub fn decrypt(
+        &self,
+        cipher: &dyn crate::secrets::SecretCipher,
+    ) -> Result<Secret, ConfigError> {
+        if self.is_encrypted() {
+            Ok(Secret(cipher.decrypt(&self.0)?))
+        } else {
+            Ok(self.clone())
+        }
     }
 }
 impl fmt::Debug for Secret {
@@ -170,6 +186,10 @@ pub struct ProxyConfig {
     /// requests and streams before its upstream session is ended.
     #[serde(default = "default_drain")]
     pub drain_timeout_secs: u64,
+    /// Rewrite plaintext secrets in the config file (hash user passwords,
+    /// encrypt upstream passwords/API keys). Default true.
+    #[serde(default = "default_true")]
+    pub rewrite_secrets: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -191,6 +211,7 @@ impl Default for ProxyConfig {
             upstream_timeout_secs: default_timeout(),
             reload_interval_secs: default_reload(),
             drain_timeout_secs: default_drain(),
+            rewrite_secrets: true,
         }
     }
 }
@@ -205,7 +226,7 @@ fn default_version() -> String {
     "10.10.7".into()
 }
 fn default_data_dir() -> PathBuf {
-    PathBuf::from("/config/data")
+    PathBuf::from("/var/lib/jmp")
 }
 fn default_unknown() -> UnknownRoutes {
     UnknownRoutes::Primary
@@ -462,6 +483,26 @@ impl Default for LoggingConfig {
     }
 }
 
+impl LoggingConfig {
+    /// Best-effort read of just the `[logging]` table of the config file, so
+    /// logging can be set up before [`Config::load`] runs (which may log
+    /// warnings, e.g. while rewriting secrets). Falls back to defaults when
+    /// the file or the section cannot be parsed; `Config::load` reports the
+    /// real error afterwards.
+    pub fn peek(path: &Path) -> LoggingConfig {
+        #[derive(Deserialize)]
+        struct OnlyLogging {
+            #[serde(default)]
+            logging: LoggingConfig,
+        }
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| toml::from_str::<OnlyLogging>(&text).ok())
+            .map(|o| o.logging)
+            .unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MetricsConfig {
@@ -532,11 +573,29 @@ impl Default for DebugConfig {
 /// The annotated example config shipped with the binary.
 pub const EXAMPLE: &str = include_str!("../config.example.toml");
 
-/// First run (no config file yet): put `config.example.toml` next to the
-/// missing `path` (only if it is not there already; `config.toml` itself is
-/// never written) and return instructions for the operator. `None` when the
+/// First run (no config file yet): try to write `config.example.toml` next to
+/// the configured `path` if its directory is writable. If not writable, return
+/// instructions telling the user to create the file manually. `None` when the
 /// config exists.
 pub fn first_run_help(path: &Path) -> Option<String> {
+    // Check if path is a directory (Docker creates a dir when bind-mounting a missing file)
+    if path.is_dir() {
+        return Some(format!(
+            "ERROR: config path {} is a directory, not a file.\n\
+             This happens when Docker bind-mounts a non-existent file - Docker creates a directory instead.\n\
+             Fix:\n\
+             1. Stop the container\n\
+             2. On the HOST, delete the directory that was created at the host bind-mount path\n\
+             3. On the HOST, create the config file: touch <host-path>/jmp.toml\n\
+             4. Make it writable by the container user (uid 65532, or 99:100 on Unraid with --user): chown 65532:65532 <host-path>/jmp.toml\n\
+             5. Edit the file with your [[user]] and [[server]] entries (see config.example.toml)\n\
+             6. Start the container again\n\
+             \n\
+             Alternatively, set JMP_CONFIG to point to a file inside a mounted directory volume instead of a single-file bind mount.",
+            path.display()
+        ));
+    }
+
     if path.exists() {
         return None;
     }
@@ -544,7 +603,14 @@ pub fn first_run_help(path: &Path) -> Option<String> {
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let example = dir.join("config.example.toml");
+
+    let example_name = if path.file_name() == Some(std::ffi::OsStr::new("jmp.toml")) {
+        "jmp.example.toml"
+    } else {
+        "config.example.toml"
+    };
+    let example = dir.join(example_name);
+
     let wrote = if example.exists() {
         Ok(false)
     } else {
@@ -561,10 +627,10 @@ pub fn first_run_help(path: &Path) -> Option<String> {
             msg += &format!(
                 "Could not write an example to {} ({e}). The config directory must be writable \
                  by this process (uid {uid}, gid {gid}); on the host run e.g. \
-                 `chown -R {uid}:{gid} <the folder mounted at {}>`, or create the file from \
+                 `chown -R {uid}:{gid} <the folder containing {}>`, or create the file from \
                  config.example.toml in the project repository.\n",
                 example.display(),
-                dir.display()
+                path.display()
             )
         }
     }
@@ -588,18 +654,75 @@ fn proc_status_id(key: &str) -> String {
         .unwrap_or_else(|| "?".into())
 }
 
+fn is_permission_error(e: &ConfigError) -> bool {
+    matches!(e, ConfigError::Io { source, .. } if matches!(
+        source.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+    ))
+}
+
 impl Config {
     pub fn load(path: &Path, cache: &PasswordCache) -> Result<Config, ConfigError> {
         let mut text = std::fs::read_to_string(path).map_err(|e| ConfigError::Io {
             path: path.to_path_buf(),
             source: e,
         })?;
-        let r = Self::parse(&text, cache);
+
+        // Parse to get the data_dir (needed for key loading)
+        let raw: RawConfig = match toml::from_str(&text) {
+            Ok(r) => r,
+            Err(_) => {
+                // parse() reports the error (with the friendlier message for the
+                // pre-[[server]] layout); wipe the text only afterwards.
+                let r = Self::parse(&text, cache);
+                text.zeroize();
+                return r;
+            }
+        };
+
+        let data_dir = raw.proxy.data_dir.clone();
+
+        // Load encryption key
+        let key_store = crate::secrets::DefaultKeyStore;
+        let key = key_store.load(&data_dir)?;
+        let cipher = crate::secrets::XChaCha20Cipher::new(key);
+
+        // Rewrite secrets if enabled and writable
+        if raw.proxy.rewrite_secrets {
+            match crate::config_rewrite::rewrite_secrets(path, cache, &cipher) {
+                Ok(true) => {
+                    tracing::info!(path = %path.display(), "rewrote plaintext secrets in config file");
+                }
+                Ok(false) => {}
+                Err(e) if is_permission_error(&e) => {
+                    counter!(crate::telemetry::names::SECRET_REWRITE_FAILURES).increment(1);
+                    tracing::warn!(
+                        path = %path.display(),
+                        "config file not writable; secrets remain plaintext on disk: {e}"
+                    );
+                }
+                Err(e) => {
+                    counter!(crate::telemetry::names::SECRET_REWRITE_FAILURES).increment(1);
+                    text.zeroize();
+                    return Err(e);
+                }
+            }
+        }
+
+        let r = Self::parse_with_cipher(&text, cache, Some(&cipher));
         text.zeroize();
         r
     }
 
     pub fn parse(text: &str, cache: &PasswordCache) -> Result<Config, ConfigError> {
+        Self::parse_with_cipher(text, cache, None)
+    }
+
+    fn parse_with_cipher(
+        text: &str,
+        cache: &PasswordCache,
+        cipher: Option<&dyn crate::secrets::SecretCipher>,
+    ) -> Result<Config, ConfigError> {
         let raw: RawConfig = match toml::from_str(text) {
             Ok(r) => r,
             Err(e) => {
@@ -628,11 +751,33 @@ impl Config {
                 password,
             });
         }
+
+        // Decrypt upstream secrets
+        let mut upstreams = raw.upstreams.clone();
+        if let Some(c) = cipher {
+            for upstream in &mut upstreams {
+                if let Some(password) = &upstream.password {
+                    upstream.password = Some(password.decrypt(c).map_err(|e| {
+                        counter!(crate::telemetry::names::SECRET_DECRYPT_FAILURES, "kind" => "upstream_password").increment(1);
+                        tracing::error!(upstream = %upstream.name, "failed to decrypt upstream password: {e}");
+                        e
+                    })?);
+                }
+                if let Some(api_key) = &upstream.api_key {
+                    upstream.api_key = Some(api_key.decrypt(c).map_err(|e| {
+                        counter!(crate::telemetry::names::SECRET_DECRYPT_FAILURES, "kind" => "upstream_api_key").increment(1);
+                        tracing::error!(upstream = %upstream.name, "failed to decrypt upstream api_key: {e}");
+                        e
+                    })?);
+                }
+            }
+        }
+
         // `raw` (and with it every plaintext) is dropped + zeroized here.
         let cfg = Config {
             proxy: raw.proxy.clone(),
             users,
-            upstreams: raw.upstreams.clone(),
+            upstreams,
             merge: raw.merge.clone(),
             cache: raw.cache.clone(),
             tls: raw.tls.clone(),
@@ -734,10 +879,10 @@ mod tests {
     #[test]
     fn first_run_writes_example_once_and_never_the_config() {
         let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join("sub/config.toml");
+        let cfg = dir.path().join("sub/jmp.toml");
         let msg = first_run_help(&cfg).unwrap();
         assert!(msg.contains("Wrote an annotated example"), "{msg}");
-        let example = dir.path().join("sub/config.example.toml");
+        let example = dir.path().join("sub/jmp.example.toml");
         assert_eq!(std::fs::read_to_string(&example).unwrap(), EXAMPLE);
         assert!(!cfg.exists());
         // Existing example is left alone.
@@ -747,6 +892,49 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&example).unwrap(), "# mine");
         std::fs::write(&cfg, "").unwrap();
         assert!(first_run_help(&cfg).is_none());
+    }
+
+    #[test]
+    fn logging_peek_reads_only_logging_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("jmp.toml");
+        std::fs::write(
+            &cfg,
+            "[proxy]\nunknown_key = 1\n\n[logging]\nfilter = \"debug\"\nformat = \"json\"\n",
+        )
+        .unwrap();
+        let l = LoggingConfig::peek(&cfg);
+        assert_eq!(l.filter, "debug");
+        assert_eq!(l.format, LogFormat::Json);
+        // Missing file or broken TOML: defaults, the real error comes from load().
+        assert_eq!(
+            LoggingConfig::peek(&dir.path().join("nope.toml")),
+            LoggingConfig::default()
+        );
+        std::fs::write(&cfg, "[logging\n").unwrap();
+        assert_eq!(LoggingConfig::peek(&cfg), LoggingConfig::default());
+    }
+
+    #[test]
+    fn load_keeps_friendly_message_for_old_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("jmp.toml");
+        std::fs::write(&cfg, "[server]\nlisten = \"0.0.0.0:8096\"\n").unwrap();
+        let err = Config::load(&cfg, &PasswordCache::default()).unwrap_err();
+        assert!(err.to_string().contains("is now `[proxy]`"), "{err}");
+    }
+    #[test]
+    fn first_run_detects_directory_instead_of_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_dir = dir.path().join("jmp.toml");
+        // Create a directory with the config name (simulates Docker bind mount issue)
+        std::fs::create_dir(&cfg_dir).unwrap();
+
+        let msg = first_run_help(&cfg_dir).unwrap();
+        assert!(msg.contains("is a directory, not a file"), "{msg}");
+        assert!(msg.contains("Docker bind-mounts"), "{msg}");
+        assert!(msg.contains("HOST"), "{msg}");
+        assert!(msg.contains("65532"), "{msg}");
     }
 
     #[test]

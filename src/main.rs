@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 const USAGE: &str = "usage: jellyfin-merge-proxy [--config PATH] [--metrics-md] [--version]
 
-  -c, --config PATH   config file (default: $JMP_CONFIG or /config/config.toml)
+  -c, --config PATH   config file (default: $JMP_CONFIG or /etc/jmp.toml)
       --metrics-md    print the METRICS.md metric reference and exit
   -V, --version       print version
 
@@ -37,7 +37,7 @@ fn main() -> anyhow::Result<()> {
     }
     let path = path
         .or_else(|| std::env::var_os("JMP_CONFIG").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("/config/config.toml"));
+        .unwrap_or_else(|| PathBuf::from("/etc/jmp.toml"));
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -50,16 +50,21 @@ async fn run(path: PathBuf) -> anyhow::Result<()> {
         eprintln!("jellyfin-merge-proxy: {help}");
         std::process::exit(2);
     }
+
+    // Set up logging from the file's [logging] section before loading the
+    // config, so warnings emitted while loading (secret rewriting, key
+    // permissions) are visible. The subscriber can only be installed once.
+    let log = jmp::telemetry::init_logging(&jmp::config::LoggingConfig::peek(&path));
+
     let cache = jmp::config::PasswordCache::default();
     let cfg = match jmp::config::Config::load(&path, &cache) {
         Ok(c) => c,
         Err(e) => {
-            // Logging is not configured yet: print plainly.
-            eprintln!("error: config {}: {e:#}", path.display());
+            tracing::error!(config = %path.display(), "failed to load config: {e:#}");
             std::process::exit(2);
         }
     };
-    let log = jmp::telemetry::init_logging(&cfg.logging);
+
     tracing::info!(version = env!("CARGO_PKG_VERSION"), git_sha = jmp::telemetry::git_sha(), config = %path.display(), "starting");
     let running = jmp::server::start(
         cfg,
