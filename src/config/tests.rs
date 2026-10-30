@@ -206,3 +206,43 @@ fn argon2_passthrough_and_validation() {
     let bad = MINI.replace("\"pw\"", "{ argon2 = 'not-a-hash' }");
     assert!(Config::parse(&bad, &cache).is_err());
 }
+
+#[test]
+fn database_section_defaults_and_modes() {
+    const BASE: &str = "[[user]]\nname = \"me\"\npassword = \"pw\"\n[[server]]\nname = \"a\"\nurl = \"http://a:8096\"\napi_key = \"k\"\n";
+    let cache = PasswordCache::default();
+    let cfg = Config::parse(BASE, &cache).unwrap();
+    assert_eq!(cfg.database, DatabaseConfig::default());
+    assert_eq!(cfg.database.journal_mode, JournalMode::Wal);
+    assert_eq!(cfg.database.synchronous, Synchronous::Normal);
+    assert_eq!(cfg.database.busy_timeout_ms, 5000);
+    assert_eq!(
+        cfg.database.resolved_path(Path::new("/var/lib/jmp")),
+        Path::new("/var/lib/jmp/jmp.db")
+    );
+
+    for mode in JournalMode::ALL {
+        let text = format!("{BASE}[database]\njournal_mode = \"{mode}\"\nsynchronous = \"full\"\npath = \"/x/state.db\"\nbusy_timeout_ms = 10\n");
+        let db = Config::parse(&text, &cache).unwrap().database;
+        assert_eq!(db.journal_mode, mode);
+        assert_eq!(db.synchronous, Synchronous::Full);
+        assert_eq!(db.busy_timeout_ms, 10);
+        assert_eq!(db.resolved_path(Path::new("/d")), Path::new("/x/state.db"));
+        assert_eq!(
+            JournalMode::parse(&mode.as_str().to_uppercase()),
+            Some(mode)
+        );
+    }
+    assert_eq!(JournalMode::parse("wal2"), None);
+    assert!(Config::parse(
+        &format!("{BASE}[database]\njournal_mode = \"wal2\"\n"),
+        &cache
+    )
+    .is_err());
+    assert!(Config::parse(
+        &format!("{BASE}[database]\nsynchronous = \"sometimes\"\n"),
+        &cache
+    )
+    .is_err());
+    assert!(Config::parse(&format!("{BASE}[database]\nbogus = 1\n"), &cache).is_err());
+}

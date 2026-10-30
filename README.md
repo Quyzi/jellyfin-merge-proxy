@@ -54,9 +54,12 @@ rustls (no OpenSSL), tracing, metrics + Prometheus exporter.
 * **IDs.** Every id an upstream returns (items, views, users, sessions, ...)
   is rewritten, recursively through the JSON, to a proxy id:
   `hex(sha256("jmp1:" + upstream name + ":" + upstream id))[..32]`. The
-  mapping is kept in a lookup table persisted to `data_dir/ids.tsv`, so a
+  mapping is kept in a lookup table persisted to `data_dir/jmp.db`, so a
   proxy id always routes back to the owning upstream and original id. Ids in
   request paths, query strings and JSON bodies are translated back.
+  The `ids.tsv`, `siblings.tsv` and `sessions.json` files of earlier versions
+  are imported into `jmp.db` on first start (every id stays the same) and
+  renamed to `*.migrated`.
 * **Libraries.** Upstream views are grouped by (name, collection type) when
   `merge_libraries_by_name = true`; a merged view gets its own stable id and
   queries against it fan out to the member libraries.
@@ -68,7 +71,7 @@ rustls (no OpenSSL), tracing, metrics + Prometheus exporter.
   Upstreams are always asked for `ProviderIds` when dedupe applies.
 * **Shows split across servers.** With `dedupe`, a series on several servers
   is listed once, and its other copies are remembered as *siblings*
-  (`data_dir/siblings.tsv`). Its seasons and episodes (`/Shows/{id}/Seasons`,
+  (also in `data_dir/jmp.db`). Its seasons and episodes (`/Shows/{id}/Seasons`,
   `/Shows/{id}/Episodes`, `/Items?ParentId=`) fan out to every copy and merge
   by season / episode number, so S01 from one server and S02 from another
   browse as one show. Each episode still plays from (and records watch state
@@ -293,6 +296,7 @@ Sections:
 | `[cache]` | `enabled`, `ttl_secs`, `refresh_interval_secs`, `max_entries`, `serve_stale_on_error`, `persist_path` |
 | `[tls]` | `cert_path`, `key_path`, `min_version`, `client_auth`, `client_ca_path`, `http2`, `redirect_http_listen` |
 | `[upstream_tls]` | defaults for all upstreams: `ca_path`, `insecure_skip_verify`, `client_cert_path`, `client_key_path`, `min_version`, `server_name` |
+| `[database]` | `path` (default `<data_dir>/jmp.db`), `journal_mode` (`wal` default\|`delete`\|`truncate`\|`persist`\|`memory`\|`off`), `synchronous` (`normal` default\|`off`\|`full`\|`extra`), `busy_timeout_ms` (default 5000) |
 | `[logging]` | `filter`, `format` (`pretty`\|`compact`\|`json`), `ansi` |
 | `[metrics]` | `enabled`, `path`, `listen`, `require_auth`, `process_metrics` |
 | `[debug]` | `enabled` (default false), `path`, `users` |
