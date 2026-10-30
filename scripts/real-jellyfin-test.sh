@@ -457,8 +457,10 @@ scenario_unknown_empty() {
 . "$ROOT/scripts/real-jellyfin/scenario-index.sh"
 # shellcheck source=real-jellyfin/scenario-userdata.sh
 . "$ROOT/scripts/real-jellyfin/scenario-userdata.sh"
+# shellcheck source=real-jellyfin/scenario-accounts.sh
+. "$ROOT/scripts/real-jellyfin/scenario-accounts.sh"
 
-ALL=(base index userdata merge_off dedupe_off priority server_down api_key https_upstream listener_tls hot_reload cache unknown_empty)
+ALL=(base index userdata accounts merge_off dedupe_off priority server_down api_key https_upstream listener_tls hot_reload cache unknown_empty)
 [ $# -gt 0 ] && ALL=("$@")
 trap stop_proxy EXIT
 reset_userdata
