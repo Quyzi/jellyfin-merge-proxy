@@ -21,13 +21,34 @@ use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone)]
+/// Builds a JSON response from the request's query string.
+pub type MockHandler = Arc<dyn Fn(&[(String, String)]) -> Value + Send + Sync>;
+
+#[derive(Clone)]
 struct MockRoute {
     method: Option<Method>,
     path: String,
     status: StatusCode,
     content_type: String,
     body: Bytes,
+    handler: Option<MockHandler>,
+}
+
+impl std::fmt::Debug for MockRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MockRoute")
+            .field("method", &self.method)
+            .field("path", &self.path)
+            .field("dynamic", &self.handler.is_some())
+            .finish()
+    }
+}
+
+fn query_pairs(path_and_query: &str) -> Vec<(String, String)> {
+    let q = path_and_query.split_once('?').map(|(_, q)| q).unwrap_or("");
+    url::form_urlencoded::parse(q.as_bytes())
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect()
 }
 
 /// A recorded request.
@@ -116,6 +137,26 @@ impl MockBackend {
             status,
             content_type: content_type.to_string(),
             body,
+            handler: None,
+        });
+        self
+    }
+
+    /// Respond to `path` with JSON computed from the query (a fake server
+    /// that honours `Ids`, `StartIndex`, ... ).
+    pub fn on_query(
+        &self,
+        method: Option<Method>,
+        path: &str,
+        f: impl Fn(&[(String, String)]) -> Value + Send + Sync + 'static,
+    ) -> &Self {
+        self.routes.lock().unwrap().push(MockRoute {
+            method,
+            path: norm(path),
+            status: StatusCode::OK,
+            content_type: "application/json; charset=utf-8".into(),
+            body: Bytes::new(),
+            handler: Some(Arc::new(f)),
         });
         self
     }
@@ -233,7 +274,14 @@ impl MediaBackend for MockBackend {
                 if let Ok(v) = HeaderValue::from_str(&r.content_type) {
                     h.insert(CONTENT_TYPE, v);
                 }
-                BackendResponse::from_bytes(r.status, h, r.body.clone())
+                let body = match &r.handler {
+                    Some(f) => Bytes::from(
+                        serde_json::to_vec(&f(&query_pairs(&req.path_and_query)))
+                            .unwrap_or_default(),
+                    ),
+                    None => r.body.clone(),
+                };
+                BackendResponse::from_bytes(r.status, h, body)
             }
             None => {
                 BackendResponse::from_bytes(StatusCode::NOT_FOUND, HeaderMap::new(), Bytes::new())

@@ -81,6 +81,21 @@ request: IndexQuery::parse (Err = unsupported ⇒ live fan-out) ─► run (filt
          ─► page ─► hydrate: Users/{uid}/Items?Ids=… per owning server ─► rewrite ─► canonical Id
 ```
 
+* Page DTOs are fetched by `proxy::fetch::fetch_dtos` (`Items?Ids=` per
+  server, on the requesting user's account, through the rewriter chain).
+  Items use it via `indexed::hydrate`; `Genres`/`Studios`/`Persons`
+  (`indexed_names`) use it for one live member of each merged name, so the
+  name DTOs are Jellyfin's own (images, `UserData`), then add Jellyfin's
+  per-type counts (`IncludeItemTypes` sent; counted over the client's scope
+  with every type; episodes inherit their series' studios; seasons are not
+  counted) and honour `EnableUserData` (genres default off, studios/people
+  on) and `EnableTotalRecordCount=false` (total 0).
+* `Items/Filters2` takes genres/tags from the index and unions the keys the
+  index does not keep (audio/subtitle languages) from a live fan-out.
+  `Items/Counts` (`indexed_counts`) takes per-type counts from the index
+  (copies counted once) and lowers the summed `ItemCount` by the merged
+  copies. `Years` is a fan-out list merged by name.
+
 * A canonical id is one member's proxy id, chosen once (`assign_canonical`)
   and persisted, so it stays stable when rankings or copies change.
   `GroupedIdMapper::decode(canonical)` is the best live copy; any other

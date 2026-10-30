@@ -49,6 +49,7 @@ pub fn routes() -> Vec<Route> {
             .at("musicgenres")
             .at("studios")
             .at("persons")
+            .at("years")
             .at("artists")
             .at("artists/albumartists")
             .get(),
@@ -159,12 +160,27 @@ async fn filters(st: &Shared, r: Req, c: &Client) -> HandlerResult {
         .segs
         .get(1)
         .is_some_and(|s| s.eq_ignore_ascii_case("filters2"));
-    if let Some(res) = proxy::indexed_filters(st, &r, c, v2).await {
-        return done(res?);
+    if let Some(mut v) = proxy::indexed_filters(st, &r, c, v2).await {
+        if v2 {
+            // Values the index does not keep (audio/subtitle languages,
+            // newer servers' fields) come from the live servers.
+            let live = proxy::fan_merge_value(st, &r, c, false).await;
+            if let (serde_json::Value::Object(m), serde_json::Value::Object(l)) = (&mut v, live) {
+                for (k, mut val) in l {
+                    if let serde_json::Value::Array(a) = &mut val {
+                        a.sort_by(|x, y| x["Name"].as_str().cmp(&y["Name"].as_str()));
+                    }
+                    m.entry(k).or_insert(val);
+                }
+            }
+        }
+        return done(ok_json(v));
     }
     done(proxy::fan_merge_objects(st, &r, c, false).await?)
 }
 
 async fn counts(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    done(proxy::fan_merge_objects(st, &r, c, true).await?)
+    let mut v = proxy::fan_merge_value(st, &r, c, true).await;
+    proxy::indexed_counts(st, &r, c, &mut v);
+    done(ok_json(v))
 }
