@@ -1,5 +1,6 @@
-//! Per-user state row: user data changes, write-through to upstream copies
-//! and the one-time import of upstream state.
+//! Per-user state row: user data changes, write-through to upstream copies,
+//! the one-time import of upstream state, per-user upstream accounts and
+//! parental limits.
 
 use super::*;
 
@@ -63,5 +64,43 @@ pub(super) fn userdata(l: &mut Layout) {
         .decimals(0)
         .overrides(palette(&[("import ok", GOOD), ("import error", WARN), ("db errors", BAD)]))
         .size(24, 7),
+    );
+    l.add(
+        Panel::stat(
+            "Per-user accounts",
+            "Proxy users that act as their own upstream account ([[user.account]]), summed over servers.",
+            q(format!("sum(jmp_upstream_user_accounts{{{I}}})"), ""),
+        )
+        .unit("short")
+        .decimals(0)
+        .no_value("None")
+        .size(4, 8),
+    );
+    l.add(
+        Panel::timeseries(
+            "Per-user account logins",
+            "Logins of per-user upstream accounts by server and outcome (failure: wrong credentials; unreachable: the server is down). Requests of a user whose login fails get 503 from that server.",
+            &[q(
+                format!("sum by (server, outcome) (increase(jmp_upstream_user_auth_total{{{I}}}[$__rate_interval]))"),
+                "{{server}} {{outcome}}",
+            )],
+        )
+        .bars()
+        .unit("short")
+        .decimals(0)
+        .size(10, 8),
+    );
+    l.add(
+        Panel::timeseries(
+            "Hidden by parental limits",
+            "Items hidden from users with max_parental_rating: index (queries and NextUp), list (fan-out responses), item (direct requests answered 404).",
+            &[q(
+                format!("sum by (source) ({})", rate("jmp_parental_hidden_total", I)),
+                "{{source}}",
+            )],
+        )
+        .stacked()
+        .unit("short")
+        .size(10, 8),
     );
 }
