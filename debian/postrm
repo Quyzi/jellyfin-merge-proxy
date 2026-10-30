@@ -1,0 +1,33 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove)
+#DEBHELPER#
+        ;;
+
+    purge)
+#DEBHELPER#
+        # Remove user and data directory
+        if getent passwd jmp >/dev/null; then
+            userdel jmp || true
+        fi
+
+        if getent group jmp >/dev/null; then
+            groupdel jmp || true
+        fi
+
+        # Remove data directory on purge
+        rm -rf /var/lib/jmp || true
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

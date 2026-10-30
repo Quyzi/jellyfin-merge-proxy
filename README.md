@@ -115,6 +115,94 @@ key). Config is at `/etc/jmp.toml` (bind-mounted). If the path is a directory
 clear error with fix instructions. No certificates are needed: plain HTTP is the default,
 and TLS inbound (`[tls]`) or to upstreams (`[server.tls]`) is opt-in.
 
+## Installation
+
+### Pre-built Docker Images
+
+Official images are published to GitHub Container Registry (GHCR) for amd64 and arm64:
+
+```bash
+docker pull ghcr.io/quyzi/jellyfin-merge-proxy:latest
+```
+
+Available tags:
+- `latest` - Latest stable release
+- `X.Y.Z` - Specific version (e.g., `0.1.0`)
+- `X.Y` - Latest patch version (e.g., `0.1`)
+
+See [docker-compose.yml](docker-compose.yml) for a complete Docker Compose setup.
+
+### Debian / Ubuntu (.deb)
+
+```bash
+# Download the .deb for your architecture
+wget https://github.com/Quyzi/jellyfin-merge-proxy/releases/latest/download/jellyfin-merge-proxy_<version>_amd64.deb
+
+# Install
+sudo dpkg -i jellyfin-merge-proxy_<version>_amd64.deb
+
+# Create and edit config
+sudo nano /etc/jmp.toml
+
+# Start the service
+sudo systemctl start jellyfin-merge-proxy
+sudo systemctl enable jellyfin-merge-proxy
+
+# Check status
+sudo systemctl status jellyfin-merge-proxy
+sudo journalctl -u jellyfin-merge-proxy -f
+```
+
+The .deb package:
+- Installs the binary to `/usr/bin/jellyfin-merge-proxy`
+- Creates a dedicated `jmp` system user
+- Sets up a systemd service with hardening
+- Creates `/var/lib/jmp` for data (id map, sessions, cache, secret key)
+- Installs the example config to `/etc/jmp.toml` (not overwritten on upgrade)
+
+### RHEL / Fedora / CentOS (.rpm)
+
+```bash
+# Download the .rpm for your architecture
+wget https://github.com/Quyzi/jellyfin-merge-proxy/releases/latest/download/jellyfin-merge-proxy-<version>-1.x86_64.rpm
+
+# Install
+sudo rpm -i jellyfin-merge-proxy-<version>-1.x86_64.rpm
+
+# Create and edit config
+sudo nano /etc/jmp.toml
+
+# Start the service
+sudo systemctl start jellyfin-merge-proxy
+sudo systemctl enable jellyfin-merge-proxy
+
+# Check status
+sudo systemctl status jellyfin-merge-proxy
+sudo journalctl -u jellyfin-merge-proxy -f
+```
+
+### Binary Tarballs
+
+Pre-built binaries are available for:
+- `x86_64-unknown-linux-gnu` (glibc-based systems)
+- `aarch64-unknown-linux-gnu` (ARM64 glibc)
+- `x86_64-unknown-linux-musl` (static, no libc)
+- `aarch64-unknown-linux-musl` (ARM64 static)
+
+```bash
+# Download and extract
+wget https://github.com/Quyzi/jellyfin-merge-proxy/releases/latest/download/jellyfin-merge-proxy-<version>-x86_64-unknown-linux-gnu.tar.gz
+tar xzf jellyfin-merge-proxy-<version>-x86_64-unknown-linux-gnu.tar.gz
+cd jellyfin-merge-proxy-<version>-x86_64-unknown-linux-gnu
+
+# Copy example config
+cp config.example.toml jmp.toml
+$EDITOR jmp.toml
+
+# Run
+./jellyfin-merge-proxy
+```
+
 The image is a multi-stage build on Chainguard images
 (`cgr.dev/chainguard/rust` → `cgr.dev/chainguard/glibc-dynamic`): no shell,
 non-root, rustls/aws-lc-rs for TLS. `JMP_CONFIG=/etc/jmp.toml`, port
@@ -496,6 +584,82 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 cargo run -q -- --metrics-md > METRICS.md   # after changing telemetry::METRICS
 ```
+
+### Releasing
+
+Releases are automated via GitHub Actions. To cut a new release:
+
+1. **Update the version** in `Cargo.toml`:
+   ```sh
+   # Edit Cargo.toml and set version = "X.Y.Z"
+   vim Cargo.toml
+   ```
+
+2. **Commit and push**:
+   ```sh
+   git add Cargo.toml
+   git commit -m "chore: bump version to X.Y.Z"
+   git push origin master
+   ```
+
+3. **Tag and push the release**:
+   ```sh
+   git tag release/vX.Y.Z
+   git push origin release/vX.Y.Z
+   ```
+
+The release workflow (`.github/workflows/release.yml`) automatically:
+- Validates the tag matches `Cargo.toml` version
+- Runs fmt, clippy, and tests
+- Builds multi-arch binaries (x86_64, aarch64, gnu, musl) with tarballs + SHA256 checksums
+- Builds .deb and .rpm packages for both architectures
+- Builds and pushes multi-arch Docker images to `ghcr.io/quyzi/jellyfin-merge-proxy`
+  - Tagged with version, major.minor, and `latest` (for stable releases only)
+  - Includes provenance, SBOM, and cosign keyless signatures
+- Creates a GitHub Release with:
+  - Auto-generated release notes from git log
+  - All binaries, packages, and checksums attached
+  - Marked as prerelease if version contains `-rc`, `-alpha`, or `-beta`
+
+Check [Actions](https://github.com/Quyzi/jellyfin-merge-proxy/actions) for build status.
+
+Local package testing:
+```sh
+# Build and inspect packages
+cargo install cargo-deb cargo-generate-rpm
+cargo build --release
+cargo deb --no-build
+dpkg -c target/debian/jellyfin-merge-proxy_*.deb
+
+cargo generate-rpm
+# (rpm -qlp requires rpm tools)
+```
+
+### Dependabot Automation
+
+The repository includes Dependabot configuration (`.github/dependabot.yml`) for automated dependency updates:
+- **Cargo dependencies**: Weekly updates, grouped by minor/patch
+- **GitHub Actions**: Weekly updates, grouped
+- **Docker base images**: Weekly updates for Chainguard images
+
+Dependabot PRs are automatically merged for:
+- Patch and minor semver updates (after CI passes)
+- GitHub Actions updates
+- Docker digest updates
+
+Major version updates require manual review.
+
+**Required repository settings** (owner must enable):
+1. **Settings → General → Pull Requests**:
+   - ✅ Allow auto-merge
+2. **Settings → Branches** (for `master`):
+   - ✅ Require status checks to pass before merging
+   - ✅ Require branches to be up to date before merging
+   - Required checks: `fmt`, `clippy`, `test`, `audit`, `docker`
+3. **Settings → Code security and analysis**:
+   - ✅ Dependabot security updates
+
+Without these settings, Dependabot will still create PRs, but auto-merge won't work.
 
 Layout (details and the trait list in [ARCHITECTURE.md](ARCHITECTURE.md)):
 `src/config.rs` (TOML, secrets, validation), `src/types.rs` / `src/error.rs`
