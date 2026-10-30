@@ -2,7 +2,7 @@
 //! deploy/grafana-dashboard.json by `cargo xtask dashboard`.
 //!
 //! Layout (top to bottom): health at a glance, client traffic (RED),
-//! upstream servers, request pipeline, streaming, merge/dedupe, catalog cache,
+//! upstream servers, request pipeline, streaming, merge/dedupe, catalog index, catalog cache,
 //! clients & auth, configuration & TLS, process. Rate panels use
 //! `$__rate_interval`; "(range)" panels summarise the selected time range.
 
@@ -10,11 +10,13 @@ use crate::grafana::{color_by_name, ds, map_value, palette, q, steps, Layout, Pa
 use serde_json::{json, Value};
 
 mod catalog;
+mod index;
 mod overview;
 mod system;
 mod upstreams;
 
 use catalog::{auth, cache, merge};
+use index::index;
 use overview::{overview, traffic};
 use system::{config_tls, process};
 use upstreams::{pipeline, streaming, upstreams};
@@ -70,6 +72,7 @@ pub fn build() -> Value {
     pipeline(&mut l);
     streaming(&mut l);
     merge(&mut l);
+    index(&mut l);
     cache(&mut l);
     auth(&mut l);
     config_tls(&mut l);

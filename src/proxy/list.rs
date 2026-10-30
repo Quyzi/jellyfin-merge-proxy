@@ -126,6 +126,15 @@ pub fn with_siblings(st: &Shared, id: &str) -> ListTargets {
     if let Some(g) = st.siblings.group(&pid) {
         ids.extend(g.iter().filter(|m| **m != pid).cloned());
     }
+    if let Some(g) = st.index.group(&pid) {
+        ids.extend(
+            g.members
+                .iter()
+                .filter(|m| !ids.contains(m))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+    }
     let mut out: ListTargets = vec![];
     for m in ids {
         if let Some(Target::Item { upstream, id }) = st.ids.decode(&m) {
