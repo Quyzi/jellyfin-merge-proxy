@@ -47,7 +47,8 @@ client ─► axum router (telemetry middleware)
 | `Transport` | `backend::transport` | `HttpTransport`, `Instrumented<T>` | Raw HTTP to an upstream; the decorator emits `jmp_upstream_*` metrics. |
 | `PasswordHasher` / `PasswordVerifier` | `password` | `Argon2id`, `MeteredHasher<H>` | Proxy-user password hashing (argon2id) and verification. |
 | `ProxyAuthenticator` | `users` | `TomlAuthenticator<V>`, `MeteredAuthenticator<A>` | Proxy logins against `[[user]]` (also `Reloadable`). |
-| `IdMapper` | `ids` | `HashedIdTable` (persisted `ids.tsv`), `MeteredIdMapper<M>` | Stable proxy ids `sha256("jmp1:"+server+":"+id)`, merged views. |
+| `IdMapper` | `ids` | `HashedIdTable` (persisted through an `IdStore`), `MeteredIdMapper<M>` | Stable proxy ids `sha256("jmp1:"+server+":"+id)`, merged views. |
+| `IdStore` / `SiblingStore` / `SessionStore` (`Store`) | `store` | `SqliteStore`, `MemoryStore` | Durable state: id mappings, series sibling links, sessions. Loaded at startup into the in-memory tables, which write new entries through. |
 | `MergeStrategy` | `merge` | `MergeByNameAndType`, `KeepSeparate` | Groups libraries across servers (`[merge].merge_libraries_by_name`). |
 | `Deduplicator` | `merge` | `NoDedupe`, `ProviderIdDeduplicator`, `NameDeduplicator`, `MeteredDeduplicator<D>` | Removes duplicate items across servers in merged lists. |
 | `CatalogCache` | `cache` | `NoCache`, `MemoryCatalogCache` (TTL + max entries), `DiskCatalogCache` (memory + JSON file), `MeteredCache<C>` | Caches per-server library views (`[cache]`). |
@@ -126,7 +127,7 @@ Secret types redact in `Debug` and `Display`, and are zeroized on drop
 ## Server set (`src/servers.rs`)
 
 * `ServerRegistry`: append-only `name ⇄ ServerId` table (case-insensitive).
-  Names found in `ids.tsv` but no longer configured are registered too, so
+  Server names found in the stored id mappings but no longer configured are registered too, so
   their ids still decode to *their* `ServerId`.
 * `BackendSet`: the enabled backends in config order, stored in
   `AppState` as `Arc<ArcSwap<BackendSet>>`. Handlers take one snapshot
