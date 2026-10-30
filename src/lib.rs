@@ -21,6 +21,7 @@ pub mod dto;
 pub mod endpoints;
 pub mod error;
 pub mod ids;
+pub mod index;
 pub mod merge;
 pub mod password;
 pub mod paths;
