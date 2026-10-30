@@ -1,6 +1,12 @@
 # Example Prometheus config for jellyfin-merge-proxy (see docker-compose.yml).
 global:
   scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Load alerting rules
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   - job_name: jellyfin-merge-proxy
     metrics_path: /metrics
