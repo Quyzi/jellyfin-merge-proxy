@@ -245,6 +245,11 @@ pub(super) fn dedupe_by_id(all: Vec<Ranked>) -> (Vec<Ranked>, usize) {
 /// Fan out a request returning an object and merge the objects:
 /// arrays are unioned, numbers summed (`sum`) or the first value kept.
 pub async fn fan_merge_objects(st: &Shared, r: &Req, c: &Client, sum: bool) -> Result<Response> {
+    Ok(ok_json(fan_merge_value(st, r, c, sum).await))
+}
+
+/// The merged object of [`fan_merge_objects`].
+pub async fn fan_merge_value(st: &Shared, r: &Req, c: &Client, sum: bool) -> Value {
     let (targets, _) = list_targets(st, &r.query).await;
     let segs: Vec<String> = r.segs.clone();
     let futs = targets.into_iter().filter_map(|(u, parent)| {
@@ -293,5 +298,5 @@ pub async fn fan_merge_objects(st: &Shared, r: &Req, c: &Client, sum: bool) -> R
             }
         }
     }
-    Ok(ok_json(Value::Object(acc)))
+    Value::Object(acc)
 }
