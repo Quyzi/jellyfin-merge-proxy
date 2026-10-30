@@ -123,3 +123,23 @@ groups:
         annotations:
           summary: "Catalog index for {{ $labels.server }} is stale"
           description: "{{ $labels.server }} is up but its catalog index was last crawled more than 2 hours ago. Library queries still work but may miss new items; check the logs for index crawl errors."
+
+      - alert: UserDataWriteFailures
+        expr: increase(jmp_userdata_store_errors_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Per-user state is not being saved"
+          description: "{{ $value }} writes of per-user watch state to the database failed in the last 15 minutes. Changes are kept in memory but will be lost on restart; check disk space and permissions of the data directory."
+
+      - alert: UserDataWriteThroughErrors
+        expr: |
+          sum by (instance) (rate(jmp_userdata_write_through_total{outcome="error"}[15m]))
+            / sum by (instance) (rate(jmp_userdata_write_through_total[15m])) > 0.2
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Upstreams refuse user data changes"
+          description: "More than 20% of watch-state changes sent to upstream copies failed for 15 minutes. The proxy's own state is correct; the servers' native clients may show outdated watch state."

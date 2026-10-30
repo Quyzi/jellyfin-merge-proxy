@@ -20,6 +20,7 @@ struct Inner {
     sessions: Vec<String>,
     session_map: HashMap<String, Session>,
     index: super::index::MemIndex,
+    userdata: super::userdata::MemUserData,
 }
 
 impl MemoryStore {
@@ -112,6 +113,23 @@ impl IndexStore for MemoryStore {
     }
     fn save_view(&self, view: &StoredView) -> Result<(), StoreError> {
         self.inner.lock().unwrap().index.save_view(view);
+        Ok(())
+    }
+}
+
+impl UserDataStore for MemoryStore {
+    fn load_user_data(&self) -> Result<Vec<UserDataRow>, StoreError> {
+        Ok(self.inner.lock().unwrap().userdata.load())
+    }
+    fn put_user_data(&self, rows: &[UserDataRow]) -> Result<(), StoreError> {
+        self.inner.lock().unwrap().userdata.put(rows);
+        Ok(())
+    }
+    fn load_seeded(&self) -> Result<Vec<(String, String)>, StoreError> {
+        Ok(self.inner.lock().unwrap().userdata.seeded())
+    }
+    fn mark_seeded(&self, user: &str, server: &str) -> Result<(), StoreError> {
+        self.inner.lock().unwrap().userdata.mark(user, server);
         Ok(())
     }
 }

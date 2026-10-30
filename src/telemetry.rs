@@ -52,6 +52,12 @@ pub mod names {
     pub const INDEX_BUILD_DURATION: &str = "jmp_index_build_duration_seconds";
     pub const INDEX_QUERIES: &str = "jmp_index_queries_total";
 
+    pub const USERDATA_CHANGES: &str = "jmp_userdata_changes_total";
+    pub const USERDATA_ITEMS: &str = "jmp_userdata_items";
+    pub const USERDATA_WRITE_THROUGH: &str = "jmp_userdata_write_through_total";
+    pub const USERDATA_SEEDS: &str = "jmp_userdata_seeds_total";
+    pub const USERDATA_STORE_ERRORS: &str = "jmp_userdata_store_errors_total";
+
     pub const CACHE_REQUESTS: &str = "jmp_cache_requests_total";
     pub const CACHE_ENTRIES: &str = "jmp_cache_entries";
     pub const CACHE_BYTES: &str = "jmp_cache_bytes";
@@ -168,6 +174,11 @@ pub const METRICS: &[MetricDef] = &[
     m!(INDEX_CANONICAL, Gauge, "kind", "Canonical index contents: items (after grouping), merged (items with copies on several servers), names (merged genres/studios/people)."),
     m!(INDEX_BUILD_DURATION, Histogram, "", "Time to rebuild the index snapshot (grouping, ranking, canonical ids)."),
     m!(INDEX_QUERIES, Counter, "endpoint, outcome", "Library queries: index (answered from the index), cold (index not ready, live fan-out), unsupported (query the index cannot express, live fan-out)."),
+    m!(USERDATA_CHANGES, Counter, "op", "Per-user state changes by operation (played, unplayed, favorite, unfavorite, rating, update, start, progress, stopped, seed)."),
+    m!(USERDATA_ITEMS, Gauge, "", "Per-user item states kept by the proxy (all users)."),
+    m!(USERDATA_WRITE_THROUGH, Counter, "outcome", "User data changes sent to upstream copies: ok, error (upstream refused or unreachable)."),
+    m!(USERDATA_SEEDS, Counter, "outcome", "One-time imports of a user's upstream state per server: ok, error."),
+    m!(USERDATA_STORE_ERRORS, Counter, "", "Failed writes of user data to the database (the change stays in memory)."),
     m!(CACHE_REQUESTS, Counter, "cache, outcome", "Catalog cache lookups: hit, miss, stale (refresh forced/expired)."),
     m!(CACHE_ENTRIES, Gauge, "cache, server", "Entries held in the catalog cache."),
     m!(CACHE_BYTES, Gauge, "cache, server", "Approximate serialized size of the catalog cache."),

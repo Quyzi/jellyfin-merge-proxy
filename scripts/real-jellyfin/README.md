@@ -33,3 +33,11 @@ order of the same titles (including keys missing from the DTOs and unrated
 items), genre/person/studio filters and lists across servers, `Items/Filters`,
 a split series as one series, canonical ids that match search hints and
 survive a restart, and fallback for parameters the index does not know.
+
+`scenario-userdata.sh` checks per-user state: two proxy users sharing one
+upstream account keep independent played/favourite/like/resume state, changes
+are written through to every copy, `IsPlayed`/`IsFavorite`/`Likes` filters,
+`Resume` and `SortBy=DatePlayed` come from the index, a show split across two
+servers has exactly one NextUp entry (and `SeriesId` NextUp gives the first
+episode to a user who has watched nothing), series played state and counts
+derive from the episodes, and everything survives a restart.

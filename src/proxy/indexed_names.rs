@@ -43,6 +43,7 @@ fn item_scope(
     q: &[(String, String)],
     endpoint: &'static str,
     drop: &[&str],
+    user: &str,
 ) -> Option<Vec<usize>> {
     let mut iq: Vec<(String, String)> = q
         .iter()
@@ -53,7 +54,7 @@ fn item_scope(
         .cloned()
         .collect();
     iq.push(("Recursive".into(), "true".into()));
-    run_query(st, snap, &iq, endpoint).map(|(_, all)| all)
+    run_query(st, snap, &iq, endpoint, user).map(|(_, all)| all)
 }
 
 fn name_dto(st: &Shared, snap: &Snapshot, ni: usize) -> Value {
@@ -72,7 +73,12 @@ fn name_dto(st: &Shared, snap: &Snapshot, ni: usize) -> Value {
 }
 
 /// `Genres`, `Studios`, `Persons` from the index.
-pub async fn indexed_names(st: &Shared, r: &Req, kind: NameKind) -> Option<Result<Response>> {
+pub async fn indexed_names(
+    st: &Shared,
+    r: &Req,
+    c: &Client,
+    kind: NameKind,
+) -> Option<Result<Response>> {
     let endpoint = "named";
     let snap = warm_snapshot(st, endpoint)?;
     let q = &r.query;
@@ -84,7 +90,7 @@ pub async fn indexed_names(st: &Shared, r: &Req, kind: NameKind) -> Option<Resul
         index_outcome(endpoint, "unsupported");
         return None;
     }
-    let items = item_scope(st, &snap, q, endpoint, NAME_PARAMS)?;
+    let items = item_scope(st, &snap, q, endpoint, NAME_PARAMS, &c.user_id)?;
     index_outcome(endpoint, "index");
     let roles: Vec<String> = q_get(q, "PersonTypes")
         .map(|v| {
@@ -146,7 +152,12 @@ pub async fn indexed_names(st: &Shared, r: &Req, kind: NameKind) -> Option<Resul
 }
 
 /// `Items/Filters` (legacy) and `Items/Filters2` from the index.
-pub async fn indexed_filters(st: &Shared, r: &Req, v2: bool) -> Option<Result<Response>> {
+pub async fn indexed_filters(
+    st: &Shared,
+    r: &Req,
+    c: &Client,
+    v2: bool,
+) -> Option<Result<Response>> {
     let endpoint = "filters";
     let snap = warm_snapshot(st, endpoint)?;
     let items = item_scope(
@@ -157,6 +168,7 @@ pub async fn indexed_filters(st: &Shared, r: &Req, v2: bool) -> Option<Result<Re
         &[
             "isairing", "isseries", "ismovie", "iskids", "issports", "isnews",
         ],
+        &c.user_id,
     )?;
     index_outcome(endpoint, "index");
     let mut genres: BTreeSet<(String, usize)> = BTreeSet::new();
