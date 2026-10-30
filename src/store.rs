@@ -1,4 +1,5 @@
-//! Durable proxy state: id mappings, series sibling links and sessions.
+//! Durable proxy state: id mappings, series sibling links, sessions and
+//! the catalog index ([`IndexStore`]).
 //!
 //! The in-memory tables ([`crate::ids::HashedIdTable`],
 //! [`crate::siblings::SiblingTable`], [`crate::auth::Sessions`]) stay the
@@ -15,10 +16,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub mod import;
+pub mod index;
 mod memory;
 pub mod migrations;
 mod sqlite;
+mod sqlite_index;
 
+pub use index::{IndexStore, StoredServerIndex, StoredView};
 pub use memory::MemoryStore;
 pub use sqlite::{apply_journal_mode, publish_journal_mode, SqliteStore};
 
@@ -88,7 +92,7 @@ impl ImportBatch {
 }
 
 /// All proxy state behind one handle.
-pub trait Store: IdStore + SiblingStore + SessionStore {
+pub trait Store: IdStore + SiblingStore + SessionStore + IndexStore {
     /// Short name for logs ("sqlite", "memory").
     fn kind(&self) -> &'static str;
 
