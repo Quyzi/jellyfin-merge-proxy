@@ -165,10 +165,10 @@ impl JellyfinBackend {
         *self.transport.write().unwrap() = t;
     }
 
-    fn auth_header(&self, token: Option<&str>) -> String {
+    fn auth_header(&self, token: Option<&str>, device: &str) -> String {
         let mut s = format!(
             "MediaBrowser Client=\"{CLIENT_NAME}\", Device=\"jellyfin-merge-proxy\", DeviceId=\"{}\", Version=\"{}\"",
-            self.device_id,
+            device,
             env!("CARGO_PKG_VERSION")
         );
         if let Some(t) = token {
@@ -177,9 +177,11 @@ impl JellyfinBackend {
         s
     }
 
-    fn auth_headers(&self, token: Option<&str>) -> HeaderMap {
+    /// Per-user accounts use their own device id: Jellyfin ends a user's
+    /// older sessions on the same device when it logs in again.
+    fn auth_headers_for(&self, token: Option<&str>, device: &str) -> HeaderMap {
         let mut h = HeaderMap::new();
-        if let Ok(hv) = HeaderValue::from_str(&self.auth_header(token)) {
+        if let Ok(hv) = HeaderValue::from_str(&self.auth_header(token, device)) {
             h.insert(AUTHORIZATION, hv.clone());
             h.insert("X-Emby-Authorization", hv);
         }
@@ -266,11 +268,11 @@ impl JellyfinBackend {
 
     /// End an upstream session (`POST Sessions/Logout`). Never for API
     /// keys: logging out with one would revoke the key.
-    async fn logout(&self, token: &Secret) {
+    async fn logout(&self, token: &Secret, device: &str) {
         let r = self.build_request(
             Method::POST,
             "Sessions/Logout",
-            self.auth_headers(Some(token.expose())),
+            self.auth_headers_for(Some(token.expose()), device),
             None,
         );
         match r {
@@ -292,7 +294,7 @@ impl JellyfinBackend {
         for a in list {
             let is_password = a.kind() == "password";
             if let Some(l) = a.take().await.filter(|_| is_password) {
-                self.logout(&l.token).await;
+                self.logout(&l.token, &a.device_id).await;
             }
         }
     }
@@ -319,42 +321,6 @@ impl JellyfinBackend {
     }
 }
 
-#[async_trait]
-impl AuthChannel for JellyfinBackend {
-    fn server_name(&self) -> &str {
-        &self.name
-    }
-    async fn call(
-        &self,
-        method: Method,
-        path: &str,
-        token: Option<&str>,
-        body: Option<Value>,
-    ) -> Result<(StatusCode, Value), BackendError> {
-        let mut h = if token.is_some() || body.is_some() {
-            self.auth_headers(token)
-        } else {
-            HeaderMap::new()
-        };
-        let body = body.map(|b| {
-            h.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-            Bytes::from(serde_json::to_vec(&b).unwrap_or_default())
-        });
-        let req = self.build_request(method, path, h, body)?;
-        let resp = self.raw_send(req, false).await.map_err(|e| {
-            let e = e.without_url();
-            self.mark_down(&e.to_string());
-            BackendError::Unreachable {
-                server: self.name.clone(),
-                msg: e.to_string(),
-            }
-        })?;
-        let status = resp.status();
-        let v = resp.json::<Value>().await.unwrap_or(Value::Null);
-        Ok((status, v))
-    }
-}
-
 pub fn version_at_least(v: &str, major: u64, minor: u64) -> bool {
     let mut it = v.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
     let ma = it.next().unwrap_or(0);
@@ -362,6 +328,7 @@ pub fn version_at_least(v: &str, major: u64, minor: u64) -> bool {
     (ma, mi) >= (major, minor)
 }
 
+mod channel;
 mod media;
 mod reloadable;
 

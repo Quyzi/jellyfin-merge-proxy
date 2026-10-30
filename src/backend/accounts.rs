@@ -37,15 +37,19 @@ impl std::fmt::Debug for AccountLogin {
 pub struct Account {
     /// Proxy user name (logs only).
     pub user: String,
+    /// Upstream device id of this account's sessions (not the backend's).
+    pub device_id: String,
     cfg: UpstreamAccount,
     creds: Arc<dyn UpstreamCredentials>,
     login: Mutex<Option<AccountLogin>>,
 }
 
 impl Account {
-    fn new(user: &str, cfg: &UpstreamAccount) -> Self {
+    fn new(server: &str, user_id: &str, user: &str, cfg: &UpstreamAccount) -> Self {
+        let server = server.to_ascii_lowercase();
         Account {
             user: user.to_string(),
+            device_id: crate::ids::hash_id(&["device", &server, "user", user_id]),
             creds: credentials::from_account(cfg),
             cfg: cfg.clone(),
             login: Mutex::new(None),
@@ -143,8 +147,8 @@ impl AccountPool {
             keep
         });
         for (id, (name, c)) in want {
-            map.entry(id)
-                .or_insert_with(|| Arc::new(Account::new(&name, &c)));
+            let a = Account::new(server, &id, &name, &c);
+            map.entry(id).or_insert_with(|| Arc::new(a));
         }
         gauge!(names::USER_ACCOUNTS, "server" => server.to_string()).set(map.len() as f64);
         if !dropped.is_empty() {

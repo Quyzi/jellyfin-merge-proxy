@@ -1,6 +1,7 @@
 use super::*;
 use crate::password::PasswordCache;
 use crate::tls::RustlsProvider;
+use std::collections::HashMap;
 
 fn cfg(priority: &str) -> Config {
     let text = format!(
@@ -54,6 +55,8 @@ struct FakeJellyfin {
     /// Tokens that get one 401 (then are "revoked").
     expire: std::sync::Mutex<Vec<String>>,
     logins: std::sync::atomic::AtomicUsize,
+    /// Login user -> the DeviceId it logged in with.
+    devices: std::sync::Mutex<HashMap<String, String>>,
 }
 
 impl Transport for FakeJellyfin {
@@ -80,6 +83,10 @@ impl Transport for FakeJellyfin {
                 .logins
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let user = body.unwrap()["Username"].as_str().unwrap().to_string();
+            let auth = req.headers()["Authorization"].to_str().unwrap();
+            let dev = auth.split("DeviceId=\"").nth(1).unwrap();
+            let dev = dev.split('"').next().unwrap().to_string();
+            self.devices.lock().unwrap().insert(user.clone(), dev);
             (
                 200,
                 serde_json::json!({"AccessToken": format!("tok-{user}-{n}"), "User": {"Id": format!("id-{user}")}}),
@@ -163,4 +170,7 @@ async fn per_user_accounts_carry_their_own_token() {
         before + 1
     );
     assert!(!format!("{:?}", b.accounts).contains("kpw"));
+    // Jellyfin ends older sessions of a device: accounts use their own.
+    let devs = fake.devices.lock().unwrap();
+    assert_ne!(devs["kid"], devs["shared"]);
 }
