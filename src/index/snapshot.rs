@@ -81,6 +81,8 @@ pub struct Snapshot {
     name_by_id: HashMap<ProxyItemId, usize>,
     name_by_key: HashMap<(NameKind, String), usize>,
     pub groups: GroupMap,
+    /// Every (server, library id) that holds indexed items.
+    pub libraries: std::collections::HashSet<(ServerId, String)>,
 }
 
 /// What a build produced besides the snapshot.
@@ -190,6 +192,7 @@ impl Snapshot {
                 let c = &copies[*ci];
                 for l in &c.entry.libraries {
                     item.libraries.push((c.server, l.clone()));
+                    snap.libraries.insert((c.server, l.clone()));
                 }
             }
         }
