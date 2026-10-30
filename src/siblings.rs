@@ -6,22 +6,23 @@
 //! fanned out to every sibling and merged (seasons by number, episodes by
 //! season + episode number), so a show split across servers browses as one.
 //!
-//! Groups are persisted to `<data_dir>/siblings.tsv` (one `id\tid` pair per
-//! line) so that ids held by clients keep their merged view across restarts.
+//! Links are saved to the state store ([`crate::store::SiblingStore`]) so
+//! that ids held by clients keep their merged view across restarts.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::io::{BufRead, Write};
-use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
+use crate::store::{SiblingStore, StoreError};
+use crate::telemetry::names;
 use crate::types::ProxyItemId;
+use metrics::counter;
 
 #[derive(Default)]
 pub struct SiblingTable {
     groups: RwLock<HashMap<ProxyItemId, Arc<Vec<ProxyItemId>>>>,
     /// Ids already looked up on the other servers (not persisted).
     checked: Mutex<HashSet<ProxyItemId>>,
-    persist: Option<Mutex<std::fs::File>>,
+    store: Option<Arc<dyn SiblingStore>>,
 }
 
 impl SiblingTable {
@@ -29,28 +30,16 @@ impl SiblingTable {
         Self::default()
     }
 
-    /// Load `siblings.tsv` from `dir` and append new links to it.
-    pub fn with_persistence(mut self, dir: &Path) -> std::io::Result<Self> {
-        let path = dir.join("siblings.tsv");
-        if let Ok(f) = std::fs::File::open(&path) {
-            let mut n = 0usize;
-            for line in std::io::BufReader::new(f).lines().map_while(Result::ok) {
-                let mut it = line.split('\t');
-                if let (Some(a), Some(b)) = (
-                    it.next().and_then(ProxyItemId::parse),
-                    it.next().and_then(ProxyItemId::parse),
-                ) {
-                    self.union(&[a, b]);
-                    n += 1;
-                }
-            }
-            tracing::info!("loaded {n} sibling links from {}", path.display());
+    /// Load the links saved in `store` and save new links to it.
+    pub fn with_store(mut self, store: Arc<dyn SiblingStore>) -> Result<Self, StoreError> {
+        let links = store.load_links()?;
+        for (a, b) in &links {
+            self.union(&[a.clone(), b.clone()]);
         }
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-        self.persist = Some(Mutex::new(file));
+        tracing::info!("loaded {} sibling links from the state store", links.len());
+        counter!(names::PERSIST_OPS, "store" => "siblings", "op" => "load", "outcome" => "success")
+            .increment(1);
+        self.store = Some(store);
         Ok(self)
     }
 
@@ -87,12 +76,20 @@ impl SiblingTable {
         if !self.union(ids) {
             return;
         }
-        if let Some(f) = &self.persist {
-            let mut f = f.lock().unwrap();
-            for other in &ids[1..] {
-                let _ = writeln!(f, "{}\t{}", ids[0].as_str(), other.as_str());
-            }
-            let _ = f.flush();
+        if let Some(store) = &self.store {
+            let links: Vec<_> = ids[1..]
+                .iter()
+                .map(|other| (ids[0].clone(), other.clone()))
+                .collect();
+            let outcome = match store.append_links(&links) {
+                Ok(()) => "success",
+                Err(e) => {
+                    tracing::warn!("saving sibling links failed: {e}");
+                    "error"
+                }
+            };
+            counter!(names::PERSIST_OPS, "store" => "siblings", "op" => "save", "outcome" => outcome)
+                .increment(1);
         }
     }
 
@@ -125,8 +122,8 @@ mod tests {
 
     #[test]
     fn union_is_transitive_and_persisted() {
-        let dir = tempfile::tempdir().unwrap();
-        let t = SiblingTable::new().with_persistence(dir.path()).unwrap();
+        let store = Arc::new(crate::store::MemoryStore::new());
+        let t = SiblingTable::new().with_store(store.clone()).unwrap();
         assert!(t.group(&id(1)).is_none());
         t.link(&[id(1), id(2)]);
         t.link(&[id(3), id(2)]);
@@ -135,11 +132,31 @@ mod tests {
         assert_eq!(g.as_slice(), &[id(1), id(2), id(3)]);
         assert!(Arc::ptr_eq(&g, &t.group(&id(1)).unwrap()));
         drop(t);
-        let lines = std::fs::read_to_string(dir.path().join("siblings.tsv")).unwrap();
-        assert_eq!(lines.lines().count(), 2, "no-op links are not written");
-        let t = SiblingTable::new().with_persistence(dir.path()).unwrap();
+        use crate::store::SiblingStore;
+        assert_eq!(
+            store.load_links().unwrap().len(),
+            2,
+            "no-op links are not written"
+        );
+        let t = SiblingTable::new().with_store(store).unwrap();
         assert_eq!(t.group(&id(2)).unwrap().len(), 3);
         assert!(t.first_check(&id(9)));
         assert!(!t.first_check(&id(9)));
+    }
+
+    #[test]
+    fn links_round_trip_through_a_store() {
+        use crate::store::{MemoryStore, SiblingStore};
+        let store = Arc::new(MemoryStore::new());
+        let t = SiblingTable::new().with_store(store.clone()).unwrap();
+        t.link(&[id(1), id(2), id(3)]);
+        t.link(&[id(2), id(1)]);
+        assert_eq!(
+            store.load_links().unwrap(),
+            vec![(id(1), id(2)), (id(1), id(3))],
+            "no-op links are not saved"
+        );
+        let t = SiblingTable::new().with_store(store).unwrap();
+        assert_eq!(t.group(&id(3)).unwrap().len(), 3);
     }
 }

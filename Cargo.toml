@@ -46,7 +46,7 @@ axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 form_urlencoded = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json", "http2", "charset"] }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.7", features = ["cors", "trace"] }
 
 # TLS
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
@@ -63,6 +63,7 @@ metrics-process = "2"
 
 # Parsing
 x509-parser = "0.18"
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"
