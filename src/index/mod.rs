@@ -9,11 +9,13 @@
 //! Jellyfin's sort semantics; queries it cannot express fall back to the
 //! live fan-out.
 
+pub mod canonical;
 pub mod crawl;
 pub mod entry;
 pub mod grouping;
 pub mod groups;
 pub mod query;
 pub mod rank;
+pub mod service;
 pub mod snapshot;
 pub mod sort;

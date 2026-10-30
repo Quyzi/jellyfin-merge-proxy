@@ -387,3 +387,7 @@ impl IndexQuery {
 pub fn norm(v: &str) -> Option<String> {
     normalize_hex_id(v)
 }
+
+#[cfg(test)]
+#[path = "query_tests.rs"]
+mod tests;
