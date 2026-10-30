@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn failure_counters_start_at_zero() {
+    init_metrics();
+    let out = render();
+    for line in [
+        r#"jmp_config_reloads_total{outcome="error"} "#,
+        r#"jmp_tls_reloads_total{target="listener",outcome="error"} "#,
+        r#"jmp_tls_reloads_total{target="upstream",outcome="error"} "#,
+    ] {
+        assert!(out.contains(line), "missing {line}");
+    }
+}
+
+#[test]
 fn templates_are_bounded() {
     assert_eq!(
         route_template("/Items/0123456789abcdef0123456789abcdef/Images/Primary"),
