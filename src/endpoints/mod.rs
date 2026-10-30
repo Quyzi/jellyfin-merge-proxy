@@ -3,7 +3,8 @@
 //! Every client-facing Jellyfin route is an [`Endpoint`] in an ordered
 //! [`Registry`] (dyn: assembled at runtime, overridable through
 //! `StateOptions::endpoints`). The default registry is built from small
-//! modules ([`system`], [`users`], [`library`], [`sessions`], [`compat`])
+//! modules ([`system`], [`users`], [`library`], [`sessions`],
+//! [`userdata`], [`compat`])
 //! plus a [`fallback`] that forwards anything else to the owning backend.
 //!
 //! Routes match on *classified* path segments: a 32-hex segment becomes
@@ -21,6 +22,7 @@ pub mod fallback;
 pub mod library;
 pub mod sessions;
 pub mod system;
+pub mod userdata;
 pub mod users;
 
 use crate::proxy::{self, Client, Req};
@@ -202,6 +204,7 @@ impl Registry {
         r.extend(users::routes());
         r.extend(library::routes());
         r.extend(sessions::routes());
+        r.extend(userdata::routes());
         r.extend(compat::routes());
         r.extend(fallback::routes());
         r
