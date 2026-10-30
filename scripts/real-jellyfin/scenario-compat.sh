@@ -155,3 +155,75 @@ scenario_compat_single() {
   both "Items/Counts" "Items/Counts?userId={U}"
   reset_userdata
 }
+
+# ---------------------------------------------------------------- merged ---
+# Each direct server's answer to a path (as the upstream account): one JSON
+# per server, one per line.
+each_server() {
+  local base t
+  for base in "$S1" "$S2" "$S3"; do
+    t=$(up_token "$base" "$UP_USER" "$UP_PASS")
+    up_get "$base" "$t" "$1" | jq -c .
+  done
+}
+# Sorted unique values of a jq expression over every server's answer.
+union_of() { each_server "$1" | jq -r "$2" | sort -u; }
+uniq_names() { jq -r "$1" | sort; }
+
+scenario_compat_merged() {
+  reset_userdata
+  rm -f "$WORK/data/"*.db* 2>/dev/null || true
+  write_config "$(three_servers)"; start_proxy || { fail "proxy start"; return; }
+  login family familypw
+  check "index warm" 'wait_for 120 index_warm'
+  local want got
+
+  want=$(union_of "Years?Recursive=true" '.Items[].Name')
+  got=$(api "Years?Recursive=true&SortBy=SortName&userId=$USERID" | uniq_names '.Items[].Name')
+  check "merged: Years is the union of every server's years, once each" '[ "$got" = "$want" ] && [ -z "$(uniq -d <<<"$got")" ]' "$got | $want"
+  got=$(api "Years?Recursive=true&SortBy=SortName&SortOrder=Descending&userId=$USERID" | jq -r '[.Items[].Name] | join(",")')
+  check "merged: Years sort descending" '[ "$got" = "$(sort -r <<<"$want" | paste -sd,)" ]' "$got"
+
+  want=$(union_of "Genres?Recursive=true" '.Items[].Name')
+  got=$(api "Genres?Recursive=true&userId=$USERID" | uniq_names '.Items[].Name')
+  check "merged: Genres is the union, once each" '[ "$got" = "$want" ]' "$got | $want"
+  check "merged: Genres carry upstream images" '[ "$(api "Genres?Recursive=true&userId=$USERID" | jq "[.Items[] | select(.ImageTags.Primary)] | length")" -gt 0 ]'
+  want=$(union_of "Persons?Recursive=true" '.Items[].Name' | wc -l)
+  got=$(api "Persons?Recursive=true&userId=$USERID" | jq .TotalRecordCount)
+  check "merged: Persons total is the distinct union ($want)" '[ "$got" = "$want" ]' "$got"
+  want=$(union_of "Studios?Recursive=true" '.Items[].Name')
+  got=$(api "Studios?Recursive=true&userId=$USERID" | uniq_names '.Items[].Name')
+  check "merged: Studios is the union" '[ "$got" = "$want" ]' "$got | $want"
+
+  want=$(union_of "Items/Filters2?Recursive=true" '.AudioLanguages[]?.Value')
+  got=$(api "Items/Filters2?Recursive=true&userId=$USERID" | uniq_names '.AudioLanguages[]?.Value')
+  check "merged: Filters2 audio languages are the union" '[ "$got" = "$want" ]' "$got | $want"
+  # Legacy Filters needs a ParentId: each server's Movies vs the merged one.
+  local base t lib
+  want=$(for base in "$S1" "$S2" "$S3"; do
+    t=$(up_token "$base" "$UP_USER" "$UP_PASS")
+    lib=$(up_get "$base" "$t" "UserViews" | jq -r '.Items[] | select(.Name=="Movies") | .Id')
+    [ -n "$lib" ] && up_get "$base" "$t" "Items/Filters?ParentId=$lib&IncludeItemTypes=Movie" | jq -r '.Years[]?'
+  done | sort -u)
+  got=$(api "Items/Filters?ParentId=$(view_id Movies)&IncludeItemTypes=Movie&userId=$USERID" | jq -r '.Years[]?' | sort -u)
+  check "merged: Filters years (Movies) are the union" '[ "$got" = "$want" ]' "$got | $want"
+
+  local c movies series eps sum
+  c=$(api "Items/Counts?userId=$USERID")
+  movies=$(api "Items?Recursive=true&IncludeItemTypes=Movie&Limit=0&userId=$USERID" | jq .TotalRecordCount)
+  series=$(api "Items?Recursive=true&IncludeItemTypes=Series&Limit=0&userId=$USERID" | jq .TotalRecordCount)
+  eps=$(api "Items?Recursive=true&IncludeItemTypes=Episode&Limit=0&userId=$USERID" | jq .TotalRecordCount)
+  check "merged: Items/Counts matches the merged library ($movies movies, $series series, $eps episodes)" \
+    '[ "$(jq -c "[.MovieCount,.SeriesCount,.EpisodeCount]" <<<"$c")" = "[$movies,$series,$eps]" ]' "$c"
+  sum=$(each_server "Items/Counts" | jq -s 'map(.MovieCount) | add')
+  check "merged: duplicates are not double counted ($sum upstream movies)" '[ "$(jq .MovieCount <<<"$c")" -lt "$sum" ]' "$c"
+
+  got=$(api "Search/Hints?searchTerm=Big&Limit=20&userId=$USERID" | jq '[.SearchHints[] | select(.Name=="Big Buck Bunny")] | length')
+  check "merged: search hints list a title on two servers once" '[ "$got" = 1 ]' "$got"
+  got=$(api "Items?searchTerm=Big&Recursive=true&IncludeItemTypes=Movie,Series,Episode&Limit=24&userId=$USERID" | jq '[.Items[] | select(.Name=="Big Buck Bunny")] | length')
+  check "merged: search Items lists it once" '[ "$got" = 1 ]' "$got"
+  local g; g=$(api "Genres?Recursive=true&IncludeItemTypes=Movie&userId=$USERID" | jq -c '[.Items[] | select(.Name=="Animation")][0] | [.MovieCount, .ChildCount]')
+  movies=$(api "Items?Recursive=true&IncludeItemTypes=Movie&Genres=Animation&Limit=0&userId=$USERID" | jq .TotalRecordCount)
+  check "merged: genre MovieCount counts merged movies ($movies)" '[ "$g" = "[$movies,$movies]" ]' "$g"
+  stop_proxy
+}

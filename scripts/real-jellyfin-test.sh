@@ -462,7 +462,7 @@ scenario_unknown_empty() {
 # shellcheck source=real-jellyfin/scenario-compat.sh
 . "$ROOT/scripts/real-jellyfin/scenario-compat.sh"
 
-ALL=(base index userdata accounts compat_single merge_off dedupe_off priority server_down api_key https_upstream listener_tls hot_reload cache unknown_empty)
+ALL=(base index userdata accounts compat_single compat_merged merge_off dedupe_off priority server_down api_key https_upstream listener_tls hot_reload cache unknown_empty)
 [ $# -gt 0 ] && ALL=("$@")
 trap stop_proxy EXIT
 reset_userdata
