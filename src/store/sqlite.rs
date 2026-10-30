@@ -161,8 +161,16 @@ fn upsert_session(c: &Connection, s: &Session) -> Result<(), StoreError> {
 }
 
 impl SqliteStore {
+    /// Run `f` with the connection (reads).
+    pub(super) fn read<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        f(&self.conn.lock().unwrap())
+    }
+
     /// Run `f` in one transaction.
-    fn write<T>(
+    pub(super) fn write<T>(
         &self,
         f: impl FnOnce(&Connection) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
