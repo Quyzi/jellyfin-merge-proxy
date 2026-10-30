@@ -142,6 +142,23 @@ page_size = 500                # items per crawl request (10..10000)
 prefer = "priority"            # best copy: "priority" or "resolution" (then priority)
 
 # ---------------------------------------------------------------------------
+# Per-user state: played, play count, resume points, favourites, likes and
+# ratings are kept by the proxy for each proxy user (keyed by the merged
+# item, so a show split across servers has one state per episode, and two
+# proxy users sharing one upstream account have independent state). Served
+# in every item's UserData and used for IsPlayed/IsFavorite/IsResumable/
+# Likes filters, SortBy=DatePlayed/PlayCount, Resume and NextUp.
+# ---------------------------------------------------------------------------
+[userdata]
+enabled = true
+write_through = true           # also send each change to every server holding a copy
+seed_from_upstream = true      # import each user's existing upstream state once per server
+                               # (with a shared account every proxy user imports the same history)
+min_resume_pct = 5.0           # Jellyfin's resume rules (Dashboard > Playback > Resume)
+max_resume_pct = 90.0
+min_resume_duration_secs = 300
+
+# ---------------------------------------------------------------------------
 # Catalog cache: library views fetched from each server are cached so the
 # home screen doesn't fan out to every upstream on each request.
 # ---------------------------------------------------------------------------
