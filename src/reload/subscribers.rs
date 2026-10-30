@@ -109,6 +109,9 @@ impl Reloadable for RestartNotices {
         if o.cache.enabled != n.cache.enabled || o.cache.persist_path != n.cache.persist_path {
             tracing::warn!("cache.enabled / cache.persist_path changes need a restart");
         }
+        if o.index.page_size != n.index.page_size {
+            tracing::warn!("index.page_size changes need a restart");
+        }
         if o.database != n.database {
             tracing::warn!("[database] changes need a restart");
         }
