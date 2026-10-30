@@ -74,9 +74,11 @@ pub(super) fn run_query(
     snap: &Snapshot,
     q: &[(String, String)],
     endpoint: &'static str,
+    user: &str,
 ) -> Option<(IndexQuery, Vec<usize>)> {
     let parent = |raw: &str| scope_of(st, snap, raw);
-    let iq = match IndexQuery::parse(q, snap, &parent, false) {
+    let with_user = st.userdata.enabled();
+    let iq = match IndexQuery::parse(q, snap, &parent, with_user) {
         Ok(iq) => iq,
         Err(reason) => {
             tracing::debug!(endpoint, %reason, "index cannot answer; using live fan-out");
@@ -84,7 +86,11 @@ pub(super) fn run_query(
             return None;
         }
     };
-    let all = iq.run(snap, &|s| is_live(st, s), &|_| None);
+    let fact = |it: &crate::index::snapshot::Item| {
+        let i = snap.item_index(&it.id)?;
+        Some(st.userdata.fact(user, snap, i))
+    };
+    let all = iq.run(snap, &|s| is_live(st, s), &fact);
     Some((iq, all))
 }
 
@@ -198,7 +204,7 @@ pub async fn indexed_items(
     q: &[(String, String)],
 ) -> Option<Result<Response>> {
     let snap = warm_snapshot(st, endpoint)?;
-    let (iq, all) = run_query(st, &snap, q, endpoint)?;
+    let (iq, all) = run_query(st, &snap, q, endpoint, &c.user_id)?;
     index_outcome(endpoint, "index");
     let _s = Stage::start("index_page");
     let page = iq.page(&all);

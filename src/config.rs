@@ -3,7 +3,7 @@
 //! Layout: `[proxy]` (the proxy's own listener/identity), `[[user]]`
 //! (proxy logins), `[[server]]` (upstream Jellyfin servers, each with an
 //! optional `[server.tls]`), `[merge]`, `[cache]`, `[tls]`, `[upstream_tls]`,
-//! `[database]`, `[index]`, `[logging]`, `[metrics]`, `[debug]`.
+//! `[database]`, `[index]`, `[userdata]`, `[logging]`, `[metrics]`, `[debug]`.
 //!
 //! The file is deserialised into `Raw*` types and then converted into
 //! [`Config`]. During conversion every proxy user password is normalised to
@@ -36,6 +36,7 @@ pub struct Config {
     pub upstream_tls: UpstreamTlsConfig,
     pub database: DatabaseConfig,
     pub index: IndexConfig,
+    pub userdata: UserDataConfig,
     pub logging: LoggingConfig,
     pub metrics: MetricsConfig,
     pub debug: DebugConfig,
@@ -75,6 +76,8 @@ struct RawConfig {
     database: DatabaseConfig,
     #[serde(default)]
     index: IndexConfig,
+    #[serde(default)]
+    userdata: UserDataConfig,
     #[serde(default)]
     logging: LoggingConfig,
     #[serde(default)]
@@ -379,12 +382,14 @@ mod load;
 mod observability;
 mod secret;
 mod tls;
+mod userdata;
 
 pub use database::*;
 pub use index::*;
 pub use observability::*;
 pub use secret::*;
 pub use tls::*;
+pub use userdata::*;
 
 #[cfg(test)]
 mod tests;

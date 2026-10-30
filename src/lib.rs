@@ -36,6 +36,7 @@ pub mod store;
 pub mod telemetry;
 pub mod tls;
 pub mod types;
+pub mod userdata;
 pub mod users;
 
 /// Backwards-compatible path for the old `upstream` module.
@@ -80,6 +81,9 @@ pub struct AppState {
     pub ids: Arc<dyn IdMapper>,
     /// The canonical catalog index.
     pub index: Arc<index::service::IndexService>,
+    /// Per-proxy-user watch state.
+    pub userdata: Arc<userdata::UserDataService>,
+    pub seeder: Arc<userdata::seed::Seeder>,
     /// Copies of one series/season on several servers.
     pub siblings: Arc<siblings::SiblingTable>,
     pub sessions: Arc<auth::Sessions>,
@@ -167,7 +171,7 @@ impl AppState {
         ));
         let ids: Arc<dyn IdMapper> = grouped.clone();
         let index = Arc::new(index::service::IndexService::new(
-            store,
+            store.clone(),
             registry.clone(),
             groups.clone(),
             cfg.index.page_size,
@@ -176,6 +180,16 @@ impl AppState {
         rewriters.push(Box::new(rewrite::MeteredRewriter(
             index::canonical::CanonicalIdRewriter::new(groups),
         )));
+        let watch = userdata::MeteredWatchState::new(userdata::UserDataTable::load(store.clone()));
+        let userdata = Arc::new(userdata::UserDataService::new(
+            Arc::new(watch),
+            index.clone(),
+            &cfg.userdata,
+        ));
+        rewriters.push(Box::new(rewrite::MeteredRewriter(
+            userdata::view::UserDataOverlay::new(userdata.clone()),
+        )));
+        let seeder = Arc::new(userdata::seed::Seeder::new(store));
         let sessions = Arc::new(sessions);
         let auth = Arc::new(users::MeteredAuthenticator(
             users::TomlAuthenticator::from_config(&cfg),
@@ -209,6 +223,7 @@ impl AppState {
         hub.subscribe(Arc::new(reload::LogFilter(opts.log.clone())));
         hub.subscribe(listener_tls.clone());
         hub.subscribe(Arc::new(reload::CatalogCacheReload(catalog.clone())));
+        hub.subscribe(userdata.clone());
         hub.subscribe(Arc::new(reload::RestartNotices));
 
         let st = Arc::new(AppState {
@@ -220,6 +235,8 @@ impl AppState {
             backend_factory: factory,
             ids,
             index,
+            userdata,
+            seeder,
             siblings: Arc::new(siblings),
             sessions,
             authenticator: auth,
@@ -308,6 +325,15 @@ impl AppState {
         }
         let weak = Arc::downgrade(self);
         self.index.spawn(weak.clone());
+        let w = weak.clone();
+        tokio::spawn(async move {
+            loop {
+                let Some(st) = w.upgrade() else { return };
+                st.seeder.pass(&st).await;
+                drop(st);
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            }
+        });
         tokio::spawn(async move {
             loop {
                 let secs = match weak.upgrade() {

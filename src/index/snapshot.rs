@@ -83,6 +83,9 @@ pub struct Snapshot {
     pub groups: GroupMap,
     /// Every (server, library id) that holds indexed items.
     pub libraries: std::collections::HashSet<(ServerId, String)>,
+    /// Episodes of each series and season (item indexes), for per-user
+    /// folder state (played / unplayed counts) and NextUp.
+    episodes: HashMap<usize, Vec<usize>>,
 }
 
 /// What a build produced besides the snapshot.
@@ -196,6 +199,13 @@ impl Snapshot {
                 }
             }
         }
+        for (i, item) in snap.items.iter().enumerate() {
+            if copies[item.copies[0]].entry.is("Episode") {
+                for p in [item.series, item.season].into_iter().flatten() {
+                    snap.episodes.entry(p).or_default().push(i);
+                }
+            }
+        }
         rows.extend(snap.build_names(&copies, encode, persisted, &mut map));
         out.canonical_rows = rows;
         snap.copies = copies;
@@ -297,6 +307,11 @@ impl Snapshot {
 
     pub fn name_by_name(&self, kind: NameKind, name: &str) -> Option<usize> {
         self.name_by_key.get(&(kind, normalize_name(name))).copied()
+    }
+
+    /// Episodes (item indexes) of a series or season, in index order.
+    pub fn episodes_of(&self, idx: usize) -> &[usize] {
+        self.episodes.get(&idx).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     pub fn len(&self) -> usize {

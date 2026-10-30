@@ -133,6 +133,11 @@ format = "compact"
 [metrics]
 enabled = true
 
+# The test media is 8 s long (the servers' resume thresholds are lowered too).
+[userdata]
+min_resume_pct = 1.0
+min_resume_duration_secs = 1
+
 [debug]
 enabled = true
 ${2:-}
@@ -450,8 +455,10 @@ scenario_unknown_empty() {
 
 # shellcheck source=real-jellyfin/scenario-index.sh
 . "$ROOT/scripts/real-jellyfin/scenario-index.sh"
+# shellcheck source=real-jellyfin/scenario-userdata.sh
+. "$ROOT/scripts/real-jellyfin/scenario-userdata.sh"
 
-ALL=(base index merge_off dedupe_off priority server_down api_key https_upstream listener_tls hot_reload cache unknown_empty)
+ALL=(base index userdata merge_off dedupe_off priority server_down api_key https_upstream listener_tls hot_reload cache unknown_empty)
 [ $# -gt 0 ] && ALL=("$@")
 trap stop_proxy EXIT
 reset_userdata

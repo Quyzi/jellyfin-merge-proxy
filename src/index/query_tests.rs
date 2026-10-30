@@ -65,7 +65,7 @@ fn folder(n: u32, kind: &str, series: Option<u32>, idx: Option<i64>) -> Entry {
 
 /// Server 0: A (Action, 5.0, PG), B (Drama), split show season 1.
 /// Server 1: A again (Action), C (Action, no rating), show season 2.
-fn snapshot() -> Snapshot {
+pub(crate) fn snapshot() -> Snapshot {
     let mut a0 = movie(1, "Alpha", "11", ("Action", 501));
     a0.community = Some(5.0);
     a0.official = Some("PG".into());
