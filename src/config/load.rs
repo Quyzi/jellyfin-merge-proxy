@@ -87,9 +87,18 @@ impl Config {
                         user: u.name.clone(),
                         source: e,
                     })?;
+            let mut accounts = u.accounts.clone();
+            if let Some(c) = cipher {
+                for a in &mut accounts {
+                    a.decrypt(&u.name, c)?;
+                }
+            }
             users.push(UserConfig {
                 name: u.name.clone(),
                 password,
+                accounts,
+                max_parental_rating: u.max_parental_rating.clone(),
+                block_unrated: u.block_unrated,
             });
         }
 
@@ -172,6 +181,7 @@ impl Config {
                 ConfigError::Invalid(format!("[[server]] '{}' server url: {e}", u.name))
             })?;
         }
+        accounts::validate_accounts(self).map_err(ConfigError::Invalid)?;
         if let Some(id) = &self.proxy.id {
             if crate::ids::normalize_hex_id(id).is_none() {
                 return bad("proxy.id must be 32 hex characters".into());

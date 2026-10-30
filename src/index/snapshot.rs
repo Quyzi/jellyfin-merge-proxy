@@ -86,6 +86,9 @@ pub struct Snapshot {
     /// Episodes of each series and season (item indexes), for per-user
     /// folder state (played / unplayed counts) and NextUp.
     episodes: HashMap<usize, Vec<usize>>,
+    /// Rating name (lower case) -> score, from every server's rating table
+    /// (the first server that knows a name wins).
+    pub ratings: HashMap<String, i64>,
 }
 
 /// What a build produced besides the snapshot.
@@ -147,6 +150,11 @@ impl Snapshot {
             map.insert(c.clone(), g.clone());
         }
         let mut snap = Snapshot::default();
+        for s in servers {
+            for (name, score) in &s.ratings {
+                snap.ratings.entry(name.to_lowercase()).or_insert(*score);
+            }
+        }
         let mut copy_item: Vec<usize> = vec![0; copies.len()];
         for (gi, (g, c)) in groups.iter().zip(&canon).enumerate() {
             for i in g {

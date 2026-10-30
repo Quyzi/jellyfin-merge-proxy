@@ -57,6 +57,9 @@ pub mod names {
     pub const USERDATA_WRITE_THROUGH: &str = "jmp_userdata_write_through_total";
     pub const USERDATA_SEEDS: &str = "jmp_userdata_seeds_total";
     pub const USERDATA_STORE_ERRORS: &str = "jmp_userdata_store_errors_total";
+    pub const USER_ACCOUNTS: &str = "jmp_upstream_user_accounts";
+    pub const USER_ACCOUNT_AUTH: &str = "jmp_upstream_user_auth_total";
+    pub const PARENTAL_HIDDEN: &str = "jmp_parental_hidden_total";
 
     pub const CACHE_REQUESTS: &str = "jmp_cache_requests_total";
     pub const CACHE_ENTRIES: &str = "jmp_cache_entries";
@@ -179,6 +182,9 @@ pub const METRICS: &[MetricDef] = &[
     m!(USERDATA_WRITE_THROUGH, Counter, "outcome", "User data changes sent to upstream copies: ok, error (upstream refused or unreachable)."),
     m!(USERDATA_SEEDS, Counter, "outcome", "One-time imports of a user's upstream state per server: ok, error."),
     m!(USERDATA_STORE_ERRORS, Counter, "", "Failed writes of user data to the database (the change stays in memory)."),
+    m!(USER_ACCOUNTS, Gauge, "server", "Proxy users with their own upstream account on this server ([[user.account]])."),
+    m!(USER_ACCOUNT_AUTH, Counter, "server, outcome", "Logins of per-user upstream accounts: success, failure, unreachable."),
+    m!(PARENTAL_HIDDEN, Counter, "source", "Items hidden by a user's max_parental_rating (source: index, list, item)."),
     m!(CACHE_REQUESTS, Counter, "cache, outcome", "Catalog cache lookups: hit, miss, stale (refresh forced/expired)."),
     m!(CACHE_ENTRIES, Gauge, "cache, server", "Entries held in the catalog cache."),
     m!(CACHE_BYTES, Gauge, "cache, server", "Approximate serialized size of the catalog cache."),

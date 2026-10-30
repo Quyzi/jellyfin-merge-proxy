@@ -5034,25 +5034,234 @@
       }
     },
     {
-      "type": "row",
-      "title": "Catalog cache",
-      "collapsed": false,
-      "panels": [],
       "id": 53,
       "gridPos": {
-        "h": 1,
-        "w": 24,
+        "h": 8,
+        "w": 4,
         "x": 0,
         "y": 134
+      },
+      "type": "stat",
+      "title": "Per-user accounts",
+      "description": "Proxy users that act as their own upstream account ([[user.account]]), summed over servers.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum(jmp_upstream_user_accounts{instance=~\"$instance\"})",
+          "legendFormat": "__auto",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "None"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background_solid",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "orientation": "auto"
       }
     },
     {
       "id": 54,
       "gridPos": {
         "h": 8,
+        "w": 10,
+        "x": 4,
+        "y": 134
+      },
+      "type": "timeseries",
+      "title": "Per-user account logins",
+      "description": "Logins of per-user upstream accounts by server and outcome (failure: wrong credentials; unreachable: the server is down). Requests of a user whose login fails get 503 from that server.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (server, outcome) (increase(jmp_upstream_user_auth_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{server}} {{outcome}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "axisSoftMax": 1
+          },
+          "min": 0,
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 55,
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 14,
+        "y": 134
+      },
+      "type": "timeseries",
+      "title": "Hidden by parental limits",
+      "description": "Items hidden from users with max_parental_rating: index (queries and NextUp), list (fan-out responses), item (direct requests answered 404).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (source) (rate(jmp_parental_hidden_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{source}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "fillOpacity": 55,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Catalog cache",
+      "collapsed": false,
+      "panels": [],
+      "id": 56,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 142
+      }
+    },
+    {
+      "id": 57,
+      "gridPos": {
+        "h": 8,
         "w": 4,
         "x": 0,
-        "y": 135
+        "y": 143
       },
       "type": "stat",
       "title": "Cache hit ratio",
@@ -5122,12 +5331,12 @@
       }
     },
     {
-      "id": 55,
+      "id": 58,
       "gridPos": {
         "h": 8,
         "w": 10,
         "x": 4,
-        "y": 135
+        "y": 143
       },
       "type": "timeseries",
       "title": "Cache lookups",
@@ -5238,12 +5447,12 @@
       }
     },
     {
-      "id": 56,
+      "id": 59,
       "gridPos": {
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 135
+        "y": 143
       },
       "type": "timeseries",
       "title": "Catalog refresh time (p95)",
@@ -5308,12 +5517,12 @@
       }
     },
     {
-      "id": 57,
+      "id": 60,
       "gridPos": {
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 143
+        "y": 151
       },
       "type": "table",
       "title": "Cache by upstream",
@@ -5539,12 +5748,12 @@
       ]
     },
     {
-      "id": 58,
+      "id": 61,
       "gridPos": {
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 143
+        "y": 151
       },
       "type": "timeseries",
       "title": "Refresh failures & evictions",
@@ -5664,21 +5873,21 @@
       "title": "Clients & auth",
       "collapsed": false,
       "panels": [],
-      "id": 59,
+      "id": 62,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 149
+        "y": 157
       }
     },
     {
-      "id": 60,
+      "id": 63,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 150
+        "y": 158
       },
       "type": "timeseries",
       "title": "Proxy logins",
@@ -5806,12 +6015,12 @@
       }
     },
     {
-      "id": 61,
+      "id": 64,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 150
+        "y": 158
       },
       "type": "timeseries",
       "title": "Client token checks",
@@ -5937,12 +6146,12 @@
       }
     },
     {
-      "id": 62,
+      "id": 65,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 150
+        "y": 158
       },
       "type": "timeseries",
       "title": "Password hashing (argon2 p95)",
@@ -6011,21 +6220,21 @@
       "title": "Configuration & TLS",
       "collapsed": false,
       "panels": [],
-      "id": 63,
+      "id": 66,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 157
+        "y": 165
       }
     },
     {
-      "id": 64,
+      "id": 67,
       "gridPos": {
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 158
+        "y": 166
       },
       "type": "stat",
       "title": "Version",
@@ -6085,12 +6294,12 @@
       }
     },
     {
-      "id": 65,
+      "id": 68,
       "gridPos": {
         "h": 4,
         "w": 6,
         "x": 6,
-        "y": 158
+        "y": 166
       },
       "type": "stat",
       "title": "Uptime",
@@ -6151,12 +6360,12 @@
       }
     },
     {
-      "id": 66,
+      "id": 69,
       "gridPos": {
         "h": 4,
         "w": 6,
         "x": 12,
-        "y": 158
+        "y": 166
       },
       "type": "stat",
       "title": "Config applied",
@@ -6217,12 +6426,12 @@
       }
     },
     {
-      "id": 67,
+      "id": 70,
       "gridPos": {
         "h": 4,
         "w": 6,
         "x": 18,
-        "y": 158
+        "y": 166
       },
       "type": "stat",
       "title": "Upstreams configured",
@@ -6282,12 +6491,12 @@
       }
     },
     {
-      "id": 68,
+      "id": 71,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 162
+        "y": 170
       },
       "type": "timeseries",
       "title": "Config reloads",
@@ -6400,12 +6609,12 @@
       }
     },
     {
-      "id": 69,
+      "id": 72,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 162
+        "y": 170
       },
       "type": "timeseries",
       "title": "Upstream changes on reload",
@@ -6533,12 +6742,12 @@
       }
     },
     {
-      "id": 70,
+      "id": 73,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 162
+        "y": 170
       },
       "type": "timeseries",
       "title": "Backends",
@@ -6674,12 +6883,12 @@
       }
     },
     {
-      "id": 71,
+      "id": 74,
       "gridPos": {
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 169
+        "y": 177
       },
       "type": "table",
       "title": "TLS certificates",
@@ -6873,12 +7082,12 @@
       ]
     },
     {
-      "id": 72,
+      "id": 75,
       "gridPos": {
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 169
+        "y": 177
       },
       "type": "timeseries",
       "title": "TLS reloads",
@@ -7010,21 +7219,21 @@
       "title": "Process",
       "collapsed": false,
       "panels": [],
-      "id": 73,
+      "id": 76,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 175
+        "y": 183
       }
     },
     {
-      "id": 74,
+      "id": 77,
       "gridPos": {
         "h": 7,
         "w": 6,
         "x": 0,
-        "y": 176
+        "y": 184
       },
       "type": "timeseries",
       "title": "CPU",
@@ -7090,12 +7299,12 @@
       }
     },
     {
-      "id": 75,
+      "id": 78,
       "gridPos": {
         "h": 7,
         "w": 6,
         "x": 6,
-        "y": 176
+        "y": 184
       },
       "type": "timeseries",
       "title": "Memory",
@@ -7161,12 +7370,12 @@
       }
     },
     {
-      "id": 76,
+      "id": 79,
       "gridPos": {
         "h": 7,
         "w": 6,
         "x": 12,
-        "y": 176
+        "y": 184
       },
       "type": "timeseries",
       "title": "Open file descriptors",
@@ -7232,12 +7441,12 @@
       }
     },
     {
-      "id": 77,
+      "id": 80,
       "gridPos": {
         "h": 7,
         "w": 6,
         "x": 18,
-        "y": 176
+        "y": 184
       },
       "type": "timeseries",
       "title": "Tokio runtime",

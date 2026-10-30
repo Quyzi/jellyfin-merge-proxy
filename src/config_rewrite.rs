@@ -50,6 +50,7 @@ pub fn rewrite_secrets(
                     }
                 }
             }
+            modified |= rewrite_user_accounts(user_table, cipher)?;
         }
     }
 
@@ -93,6 +94,61 @@ pub fn rewrite_secrets(
     // Write atomically
     write_atomic(path, doc.to_string().as_bytes())?;
     Ok(true)
+}
+
+/// Encrypt `password` / `api_key` in each `[[user.account]]` (array of
+/// tables or an inline `account = [{ ... }]` array).
+fn rewrite_user_accounts(
+    user: &mut toml_edit::Table,
+    cipher: &dyn SecretCipher,
+) -> Result<bool, ConfigError> {
+    let mut modified = false;
+    let fields = [
+        ("password", "user_account_password"),
+        ("api_key", "user_account_api_key"),
+    ];
+    let Some(item) = user.get_mut("account") else {
+        return Ok(false);
+    };
+    if let Some(tables) = item.as_array_of_tables_mut() {
+        for t in tables.iter_mut() {
+            for (key, kind) in fields {
+                if let Some(it) = t.get_mut(key) {
+                    if let Some(enc) = rewrite_secret(it, cipher)? {
+                        if let Some(val) = it.as_value_mut() {
+                            replace_keep_decor(val, enc);
+                            modified = true;
+                            counter!(names::SECRETS_REWRITTEN, "kind" => kind).increment(1);
+                        }
+                    }
+                }
+            }
+        }
+    } else if let Some(arr) = item.as_array_mut() {
+        for v in arr.iter_mut() {
+            let Some(t) = v.as_inline_table_mut() else {
+                continue;
+            };
+            for (key, kind) in fields {
+                if let Some(val) = t.get_mut(key) {
+                    let plain = match val.as_str() {
+                        Some(s) if !cipher.is_encrypted(s) => s.to_string(),
+                        _ => continue,
+                    };
+                    replace_keep_decor(val, cipher.encrypt(&plain)?);
+                    modified = true;
+                    counter!(names::SECRETS_REWRITTEN, "kind" => kind).increment(1);
+                }
+            }
+        }
+    }
+    Ok(modified)
+}
+
+fn replace_keep_decor(val: &mut Value, new: String) {
+    let decor = val.decor().clone();
+    *val = Value::from(new);
+    *val.decor_mut() = decor;
 }
 
 /// Hash a user password if it's plaintext. Returns `Some(hash)` if modified.
