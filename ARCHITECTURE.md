@@ -40,10 +40,11 @@ client ─► axum router (telemetry middleware)
 
 | Trait | Module | Implementations | Purpose |
 |---|---|---|---|
-| `MediaBackend` (: `Reloadable`) | `backend` | `JellyfinBackend`, `MockBackend` | One upstream media server: login state, health, `send(BackendRequest) -> BackendResponse` (buffered or streaming), `in_flight()` and `retire()` for draining after removal. |
+| `MediaBackend` (: `Reloadable`) | `backend` | `JellyfinBackend`, `MockBackend` | One upstream media server: login state, health, `send(BackendRequest) -> BackendResponse` (buffered or streaming), `in_flight()` and `retire()` for draining after removal. Per-user accounts: `has_account`, `login_as(user)`, `get_json_as`, and `BackendRequest::as_user` (defaults use the shared account). |
+| `ContentPolicy` | `parental` | `RatingPolicy` (Jellyfin's MaxParentalRating / BlockUnratedItems rule) | Whether a rating score may be shown for an item type; resolved per proxy user by `ParentalService`. |
 | `BackendFactory` | `backend` | `JellyfinFactory`, `MockFactory` | Builds a backend per `[[server]]`. Swap in `StateOptions::backend_factory`. |
 | `UpstreamCredentials` | `backend::credentials` | `PasswordCredentials` (`user` + `password`), `ApiKeyCredentials` (`api_key` + `user`/`user_id`) | How a backend obtains a token / user id. |
-| `AuthChannel` | `backend::credentials` | `JellyfinBackend` | The minimal request surface credentials need, so they are testable without HTTP. |
+| `AuthChannel` | `backend::credentials` | `JellyfinBackend`, `DeviceChannel` (the backend under a per-user account's device id) | The minimal request surface credentials need, so they are testable without HTTP. |
 | `Transport` | `backend::transport` | `HttpTransport`, `Instrumented<T>` | Raw HTTP to an upstream; the decorator emits `jmp_upstream_*` metrics. |
 | `PasswordHasher` / `PasswordVerifier` | `password` | `Argon2id`, `MeteredHasher<H>` | Proxy-user password hashing (argon2id) and verification. |
 | `ProxyAuthenticator` | `users` | `TomlAuthenticator<V>`, `MeteredAuthenticator<A>` | Proxy logins against `[[user]]` (also `Reloadable`). |
@@ -59,9 +60,9 @@ client ─► axum router (telemetry middleware)
 | `CatalogCache` | `cache` | `NoCache`, `MemoryCatalogCache` (TTL + max entries), `DiskCatalogCache` (memory + JSON file), `MeteredCache<C>` | Caches per-server library views (`[cache]`). |
 | `ConfigSource` | `reload` | `FileConfigSource`, `StaticConfigSource` | Where the config comes from. |
 | `ConfigWatcher` | `reload` | `PollingWatcher` (mtime + size of config + TLS files, default every 3 s), `SighupWatcher` | What triggers a reload; run via `reload::spawn_watcher`. |
-| `Reloadable` | `reload` | `BackendManager` (the server set; each `MediaBackend` applies its own in-place changes), `MeteredAuthenticator` (users), `SessionPruner`, `LogFilter`, `ListenerTls`, `CatalogCacheReload`, `UserDataService`, `RestartNotices` | Two-phase hot reload through `ReloadHub`: every subscriber validates, then every subscriber applies. A failed validation keeps the old config. |
+| `Reloadable` | `reload` | `BackendManager` (the server set; each `MediaBackend` applies its own in-place changes), `MeteredAuthenticator` (users), `SessionPruner`, `LogFilter`, `ListenerTls`, `CatalogCacheReload`, `UserDataService`, `ParentalService`, `RestartNotices` | Two-phase hot reload through `ReloadHub`: every subscriber validates, then every subscriber applies. A failed validation keeps the old config. |
 | `TlsProvider` | `tls` | `RustlsProvider` | Listener and upstream rustls configs, certificate expiry. |
-| `ResponseRewriter` | `rewrite`, `index::canonical` | `JsonIdRewriter`, `HlsPlaylistRewriter`, `LocationHeaderRewriter`, `CanonicalIdRewriter` (member ids → canonical ids, except `MediaSources`), `UserDataOverlay` (every `UserData` → the proxy user's), `MeteredRewriter<R>` | Ordered `RewriteChain` applied to upstream responses (ids, playlist URLs, redirects). |
+| `ResponseRewriter` | `rewrite`, `index::canonical` | `JsonIdRewriter`, `HlsPlaylistRewriter`, `LocationHeaderRewriter`, `CanonicalIdRewriter` (member ids → canonical ids, except `MediaSources`), `UserDataOverlay` (every `UserData` → the proxy user's), `ParentalFilter` (drops items over the proxy user's limit from list responses), `MeteredRewriter<R>` | Ordered `RewriteChain` applied to upstream responses (ids, playlist URLs, redirects). |
 | `Endpoint` | `endpoints` | `Route` (pattern + `Access` + handler fn) | Ordered `Registry`; modules `system`, `users`, `library`, `sessions`, `userdata`, `compat`, `fallback`. A handler may return `Flow::Next` to defer to the next match. |
 | `SecretCipher` | `secrets` | `XChaCha20Cipher` | Encrypts and decrypts upstream passwords and API keys with authenticated encryption (XChaCha20-Poly1305 AEAD). Encrypted values are prefixed `enc:v1:<base64>`. |
 | `KeyStore` | `secrets` | `DefaultKeyStore` | Manages the encryption key: reads from `JMP_SECRET_KEY` env var, or `/var/lib/jmp/secret.key` file, or auto-generates (with 0600 permissions) on first run. |
@@ -108,7 +109,7 @@ reads:  UserDataOverlay (response rewriter) ─► view::dto (series/season: agg
                                                           SortBy=DatePlayed/PlayCount, Resume
         nextup::next_up(Snapshot, live, state)      ─► Shows/NextUp (one entry per canonical series)
 Seeder (every 10 s): once per (proxy user, server) import Filters=IsPlayed|IsResumable|IsFavorite|
-        Likes|Dislikes from the upstream account; copies merged; never overwrites proxy state
+        Likes|Dislikes from the upstream account (the user's own one if configured); copies merged; never overwrites proxy state
 ```
 
 * State is keyed by the canonical id, so the copies of a movie share one
@@ -121,6 +122,38 @@ Seeder (every 10 s): once per (proxy user, server) import Filters=IsPlayed|IsRes
   last played; with `SeriesId` and nothing played, the first episode.
 * Schema: migration `0003_userdata.sql` (`user_version` 3) adds
   `user_data(user_id, item_id, state JSON)` and `user_data_seeded`.
+
+## Per-user accounts and parental limits (`src/backend/accounts.rs`, `src/parental/`)
+
+```
+[[user.account]] ─► AccountPool (per JellyfinBackend, key = proxy user id)
+                      Account: UpstreamCredentials + cached login + own device id
+request (Client.user_id) ─► BackendRequest::as_user / login_as(Some(user))
+        ─► account token if the user has one on that server, else the shared login
+           (401 re-logs in only that account)
+shared account only: library list (views), index crawl, sibling discovery
+Seeder: user with an account imports from it (mark "server#account"), others share
+        one fetch of the shared account
+
+[[user]] max_parental_rating / block_unrated ─► ParentalService (ArcSwap of limits)
+        policy(user, Snapshot) ─► RatingPolicy { max (name via Snapshot.ratings), block_unrated }
+        index queries (run_query), NextUp ─► ParentalService::retain (exact totals)
+        fan-out pages ─► retain_dtos (page total lowered)
+        forwarded lists ─► ParentalFilter rewriter (after UserDataOverlay)
+        item paths, Shows/{id}/Seasons|Episodes ─► 404 when the indexed item is blocked
+```
+
+* An item's score is its own rating's, else its series'; names are
+  resolved through the union of the servers' `Localization/ParentalRatings`
+  (lowercased). Unknown limit names, or no index yet, fail closed (score 0);
+  without rating tables, rated videos in fan-out pages are hidden.
+* Account secrets are decrypted with the `[[server]]` cipher and rewritten
+  as `enc:v1:` by `config_rewrite::rewrite_user_accounts`. Tokens are only
+  sent as headers; `AccountLogin`'s `Debug` redacts them; logs name the
+  proxy user and upstream user id only.
+* Reload: a changed or removed account is dropped from the pool and its
+  password session logged out; unchanged accounts keep their login.
+  `ParentalService` swaps limits atomically.
 
 ## Secret management (`src/secrets.rs`, `src/config_rewrite.rs`)
 
@@ -213,5 +246,5 @@ Secret types redact in `Debug` and `Display`, and are zeroized on drop
 `ReloadHub` subscribers, in order: backends (`BackendManager`) → users →
 sessions (drops sessions of removed users) → log filter → listener TLS →
 catalog cache (re-tune; full purge only when `[merge]` changed) → per-user
-state (`[userdata]`) → restart
+state (`[userdata]`) → parental limits → restart
 notices (warns about changes such as `listen` that need a restart).
