@@ -246,3 +246,50 @@ fn database_section_defaults_and_modes() {
     .is_err());
     assert!(Config::parse(&format!("{BASE}[database]\nbogus = 1\n"), &cache).is_err());
 }
+
+#[test]
+fn user_accounts_and_rating_limits() {
+    let cache = PasswordCache::default();
+    let text = r#"
+[[user]]
+name = "kid"
+password = "pw"
+max_parental_rating = "PG"
+block_unrated = true
+[[user.account]]
+server = "X"
+user = "kid"
+password = "secret-kid"
+[[user]]
+name = "teen"
+password = "pw"
+max_parental_rating = 13
+account = [{ server = "x", api_key = "k2", user_id = "abc" }]
+[[server]]
+name = "x"
+server = "http://x:8096"
+api_key = "k"
+"#;
+    let cfg = Config::parse(text, &cache).unwrap();
+    let kid = &cfg.users[0];
+    assert_eq!(kid.accounts[0].username.as_deref(), Some("kid"));
+    assert_eq!(
+        kid.max_parental_rating,
+        Some(RatingLimit::Name("PG".into()))
+    );
+    assert!(kid.block_unrated);
+    assert_eq!(
+        cfg.users[1].max_parental_rating,
+        Some(RatingLimit::Score(13))
+    );
+    assert!(!format!("{cfg:?}").contains("secret-kid"));
+    let unknown = text.replace("server = \"X\"", "server = \"nope\"");
+    assert!(Config::parse(&unknown, &cache).is_err());
+    let no_pw = text.replace("password = \"secret-kid\"\n", "");
+    assert!(Config::parse(&no_pw, &cache).is_err());
+    let dup = text.replace(
+        "account = [{ server = \"x\", api_key = \"k2\", user_id = \"abc\" }]",
+        "account = [{ server = \"x\", api_key = \"k2\" }, { server = \"x\", api_key = \"k3\" }]",
+    );
+    assert!(Config::parse(&dup, &cache).is_err());
+}

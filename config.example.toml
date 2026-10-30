@@ -64,6 +64,30 @@ password = "change-me"
 name = "chris"
 password = { plain = "also-change-me" }
 
+# Optional per-user settings:
+#
+#   max_parental_rating  hide items rated above this, like Jellyfin's
+#                        MaxParentalRating: a score (13) or a rating name
+#                        ("PG-13", resolved with the servers' rating tables)
+#   block_unrated        with a limit set, also hide unrated items
+#
+#   [[user.account]]     act as this upstream account on one server instead
+#                        of the server's shared account: requests, playback
+#                        reports and the one-time watch-state import then use
+#                        it. Same keys as [[server]] (user + password, or
+#                        api_key + optional user/user_id); secrets are
+#                        encrypted in place like the server ones. Servers
+#                        without an account use the shared one.
+#
+# [[user]]
+# name = "kids"
+# password = "change-me-too"
+# max_parental_rating = "PG"
+# [[user.account]]
+# server = "gummybear"
+# user = "kids"
+# password = "kids-upstream-password"
+
 # ---------------------------------------------------------------------------
 # Upstream Jellyfin servers, one [[server]] block each (`[[upstream]]` is
 # accepted as an alias). Order matters: the first one is the "primary"
