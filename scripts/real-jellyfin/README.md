@@ -41,3 +41,16 @@ are written through to every copy, `IsPlayed`/`IsFavorite`/`Likes` filters,
 servers has exactly one NextUp entry (and `SeriesId` NextUp gives the first
 episode to a user who has watched nothing), series played state and counts
 derive from the episodes, and everything survives a restart.
+
+`scenario-accounts.sh` checks per-user upstream accounts and parental
+limits: it creates an upstream user `kid` on s1 and s2 (deleting any
+previous one, so it starts without state) and gives the proxy user `kids`
+that account plus `max_parental_rating = "PG"`. It checks that the account
+passwords are encrypted in the config file, that `kids` imports the kid
+account's watch state and writes favourites to it (and not to the shared
+account; s3 has no kid account and keeps using the shared one), that the
+upstream sees separate sessions, that TV-MA/TV-14 series and episodes are
+hidden with exact totals, `404` for the item and its episodes, hidden from
+search hints, `Latest` and `NextUp`, and that hot reloading `block_unrated`,
+a rating name and a numeric score changes what `kids` sees, with exact
+paging.
