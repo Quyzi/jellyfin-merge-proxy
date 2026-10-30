@@ -114,9 +114,10 @@ priority = 10
 # servers -> one "Movies" library).
 merge_libraries_by_name = true
 # Hide duplicate movies/series that exist on several servers (matched by
-# Tmdb/Imdb/Tvdb provider ids); the copy from the lowest `priority` wins.
-# A series on several servers shows once, and its seasons/episodes are
-# merged from every server (by season/episode number).
+# Tmdb/Imdb/Tvdb provider ids, else name + year); the copy chosen by
+# `[index] prefer` wins. A series on several servers shows once, and its
+# seasons/episodes are merged from every server (by season/episode number).
+# With the index warm every copy answers to one stable canonical id.
 dedupe = false
 dedupe_types = ["Movie", "Series"]
 # When libraries are NOT merged but share a name, append " (upstream name)".
@@ -124,6 +125,21 @@ label_colliding_libraries = true
 # When a merged list must be re-paged, StartIndex+Limit items are requested
 # from every upstream (capped to this value).
 fanout_limit = 5000
+
+# ---------------------------------------------------------------------------
+# Catalog index: every server's library is crawled into the state database
+# and merged (grouped per [merge] dedupe, genres/studios/people by name).
+# /Items, Seasons, Episodes, Genres/Studios/Persons and Filters are then
+# answered from the index with exact TotalRecordCount, paging and sorting
+# (even by keys not in the DTOs); the page's DTOs are fetched live. Queries
+# the index cannot express, and all queries while a live server has never
+# been crawled, fall back to live fan-out.
+# ---------------------------------------------------------------------------
+[index]
+enabled = true
+refresh_interval_secs = 600    # re-crawl every server this often (min 10)
+page_size = 500                # items per crawl request (10..10000)
+prefer = "priority"            # best copy: "priority" or "resolution" (then priority)
 
 # ---------------------------------------------------------------------------
 # Catalog cache: library views fetched from each server are cached so the
