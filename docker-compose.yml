@@ -23,7 +23,7 @@ services:
       # so the proxy can rewrite secrets in place. Bind-mounted single files: atomic
       # rename fails, so secret rewriting uses safe in-place write.
       - ./jmp.toml:/etc/jmp.toml
-      # Data dir: id map (ids.tsv), sessions (sessions.json), catalog cache,
+      # Data dir: state database (jmp.db: id map, sessions), catalog cache,
       # and auto-generated secret key (secret.key). The image runs as uid 65532
       # and /var/lib/jmp is owned by 65532:65532 mode 700. For arbitrary uid
       # (e.g. `user: "99:100"` for Unraid), chown on the host first:
@@ -32,9 +32,9 @@ services:
       # OPTIONAL TLS material (listener cert/key, client CA, upstream CAs, mTLS
       # client cert). Not needed for plain HTTP, the default. Files are watched
       # and hot-reloaded; point [tls]/[server.tls] paths here.
-      # - ./certs:/config/certs:ro
+      # - ./certs:/etc/jmp/certs:ro
       # Or e.g. certificates managed by certbot / Caddy on the host:
-      # - /etc/letsencrypt/live/media.example.com:/config/certs/le:ro
+      # - /etc/letsencrypt/live/media.example.com:/etc/jmp/certs/le:ro
 
   # Optional Prometheus (scrapes /metrics, evaluates deploy/prometheus/alerts.yml)
   # and Grafana (provisioned datasource + deploy/grafana-dashboard.json).

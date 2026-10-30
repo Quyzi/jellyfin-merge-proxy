@@ -3,7 +3,7 @@ target/
 *.tar.gz
 
 # local config and proxy data (may contain passwords / tokens)
-config/
+/config/
 *.local.toml
 sessions.json
 ids.tsv
