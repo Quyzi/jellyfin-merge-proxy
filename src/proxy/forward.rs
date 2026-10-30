@@ -161,14 +161,16 @@ pub async fn forward(
             return Ok(err_resp(StatusCode::SERVICE_UNAVAILABLE, "no upstream"));
         }
     };
-    if let Err(e) = up.ensure_login().await {
-        tracing::warn!(upstream = %up.name(), "{e}");
-        return Ok(err_resp(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "upstream unavailable",
-        ));
-    }
-    let uc = up.session().await;
+    let uc = match up.login_as(Some(&c.user_id)).await {
+        Ok(uc) => uc,
+        Err(e) => {
+            tracing::warn!(upstream = %up.name(), "{e}");
+            return Ok(err_resp(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "upstream unavailable",
+            ));
+        }
+    };
     let user_ids = st.authenticator.ids();
     let ic = in_ctx(st, up.as_ref(), &uc, &user_ids);
     let segs_override_none = segs_override.is_none();
@@ -225,7 +227,8 @@ pub async fn forward(
     let req = BackendRequest::new(r.method.clone(), pq)
         .headers(headers)
         .body(body)
-        .streaming(true);
+        .streaming(true)
+        .as_user(Some(&c.user_id));
     let resp = match up.send(req).await {
         Ok(resp) => resp,
         Err(e @ BackendError::Down { .. }) => {

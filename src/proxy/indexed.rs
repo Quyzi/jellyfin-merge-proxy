@@ -135,15 +135,15 @@ pub(super) async fn hydrate(
         .iter()
         .filter_map(|k| q_get(client_q, k).map(|v| (k.to_string(), v.to_string())))
         .collect();
+    let user = c.user_id.as_str();
     let futs = by_server.into_iter().filter_map(|(s, ids)| {
         let up = st.backend(s)?;
         let extra = extra.clone();
         Some(async move {
             let mut got: Vec<(String, Value)> = vec![];
-            if up.ensure_login().await.is_err() {
+            let Ok(uc) = up.login_as(Some(user)).await else {
                 return (up, None, got);
-            }
-            let uc = up.session().await;
+            };
             for chunk in ids.chunks(100) {
                 let mut q = vec![("Ids".to_string(), chunk.join(","))];
                 q.extend(extra.iter().cloned());
@@ -153,7 +153,10 @@ pub(super) async fn hydrate(
                     "Items".to_string(),
                 ];
                 let segs = crate::paths::adapt(path, &mut q, uc.modern, uc.user_id.as_deref());
-                match up.get_json(&path_with_query(&segs, &q)).await {
+                match up
+                    .get_json_as(Some(user), &path_with_query(&segs, &q))
+                    .await
+                {
                     Ok((s, mut v)) if s.is_success() => {
                         if let Some(Value::Array(a)) = v.get_mut("Items").map(Value::take) {
                             for it in a {
