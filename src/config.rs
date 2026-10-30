@@ -46,6 +46,13 @@ pub struct Config {
 pub struct UserConfig {
     pub name: String,
     pub password: HashedPassword,
+    /// Upstream accounts this user acts as (`[[user.account]]`); servers
+    /// without one use the server's shared account.
+    pub accounts: Vec<UpstreamAccount>,
+    /// Hide items rated above this (Jellyfin's MaxParentalRating).
+    pub max_parental_rating: Option<RatingLimit>,
+    /// With a limit set, also hide items that have no rating.
+    pub block_unrated: bool,
 }
 
 #[derive(Deserialize)]
@@ -92,6 +99,12 @@ struct RawUserConfig {
     #[serde(alias = "username")]
     name: String,
     password: RawPassword,
+    #[serde(default, rename = "account", alias = "accounts")]
+    accounts: Vec<UpstreamAccount>,
+    #[serde(default)]
+    max_parental_rating: Option<RatingLimit>,
+    #[serde(default)]
+    block_unrated: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -376,6 +389,7 @@ fn is_permission_error(e: &ConfigError) -> bool {
     ))
 }
 
+mod accounts;
 mod database;
 mod index;
 mod load;
@@ -384,6 +398,7 @@ mod secret;
 mod tls;
 mod userdata;
 
+pub use accounts::*;
 pub use database::*;
 pub use index::*;
 pub use observability::*;

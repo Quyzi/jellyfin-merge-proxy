@@ -212,3 +212,51 @@ fn should_fallback_on_permission_errors() {
     };
     assert!(!should_fallback_to_inplace(&err));
 }
+
+#[test]
+fn user_account_secrets_are_encrypted() {
+    let dir = tempdir().unwrap();
+    let cfg_path = dir.path().join("config.toml");
+    let toml = r#"
+[[user]]
+name = "kid"
+password = { argon2 = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2hoYXNoaGFzaA" }
+
+[[user.account]]
+server = "a"
+user = "kid_a"
+password = "acct-pass" # kept comment
+
+[[user]]
+name = "bob"
+password = { argon2 = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2hoYXNoaGFzaA" }
+account = [{ server = "a", api_key = "acct-key" }]
+"#;
+    fs::write(&cfg_path, toml).unwrap();
+    let cache = PasswordCache::default();
+    let cipher = XChaCha20Cipher::new(EncryptionKey::generate());
+    assert!(rewrite_secrets(&cfg_path, &cache, &cipher).unwrap());
+    let text = fs::read_to_string(&cfg_path).unwrap();
+    assert!(!text.contains("acct-pass") && !text.contains("acct-key"));
+    assert!(text.contains("# kept comment"));
+    let doc: DocumentMut = text.parse().unwrap();
+    let users = doc.get("user").unwrap().as_array_of_tables().unwrap();
+    let kid = users.iter().next().unwrap();
+    let acct = kid.get("account").unwrap().as_array_of_tables().unwrap();
+    let p = acct.iter().next().unwrap().get("password").unwrap();
+    assert_eq!(cipher.decrypt(p.as_str().unwrap()).unwrap(), "acct-pass");
+    let bob = users.iter().nth(1).unwrap();
+    let arr = bob.get("account").unwrap().as_array().unwrap();
+    let k = arr
+        .get(0)
+        .unwrap()
+        .as_inline_table()
+        .unwrap()
+        .get("api_key");
+    assert_eq!(
+        cipher.decrypt(k.unwrap().as_str().unwrap()).unwrap(),
+        "acct-key"
+    );
+    // Idempotent.
+    assert!(!rewrite_secrets(&cfg_path, &cache, &cipher).unwrap());
+}
