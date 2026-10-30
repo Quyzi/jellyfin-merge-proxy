@@ -4001,7 +4001,7 @@
     },
     {
       "type": "row",
-      "title": "Catalog cache",
+      "title": "Catalog index",
       "collapsed": false,
       "panels": [],
       "id": 41,
@@ -4019,6 +4019,659 @@
         "w": 4,
         "x": 0,
         "y": 103
+      },
+      "type": "stat",
+      "title": "Answered from the index",
+      "description": "Share of library queries (Items, Seasons, Episodes, Genres/Studios/Persons, Filters) answered from the index with exact totals and sorting. The rest went to live fan-out because the index was cold or the query used a parameter it cannot express.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(jmp_index_queries_total{instance=~\"$instance\", outcome=\"index\"}[$__rate_interval])) / sum(rate(jmp_index_queries_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "__auto",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.8
+              }
+            ]
+          },
+          "mappings": [],
+          "unit": "percentunit",
+          "decimals": 1,
+          "noValue": "No library queries"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background_solid",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 43,
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 4,
+        "y": 103
+      },
+      "type": "timeseries",
+      "title": "Library queries by outcome",
+      "description": "index: answered from the index; cold: a live server has never been crawled (live fan-out); unsupported: the query needs something the index does not hold (live fan-out).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (outcome) (rate(jmp_index_queries_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{outcome}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "fillOpacity": 55,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "min": 0,
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "index"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cold"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "unsupported"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 44,
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 14,
+        "y": 103
+      },
+      "type": "timeseries",
+      "title": "Canonical catalog",
+      "description": "Items after grouping copies, items with copies on several servers, and genres/studios/people merged by name.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "max by (kind) (jmp_index_canonical{instance=~\"$instance\"})",
+          "legendFormat": "{{kind}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "min": 0,
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "items"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "merged"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "names"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 45,
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 111
+      },
+      "type": "table",
+      "title": "Index by upstream",
+      "description": "Items indexed per upstream and time since its last successful crawl (orange after 30 min, red after 2 h; the default refresh is 10 min).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (server) (jmp_index_items{instance=~\"$instance\", server=~\"$server\"})",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "time() - max by (server) (jmp_index_last_sync_timestamp_seconds{instance=~\"$instance\", server=~\"$server\"})",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "refId": "B",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Items"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Since crawl"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Items"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Since crawl"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1800.0
+                    },
+                    {
+                      "color": "red",
+                      "value": 7200.0
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "server",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "server": 0,
+              "Value #A": 1,
+              "Value #B": 2
+            },
+            "renameByName": {
+              "Value #A": "Items",
+              "Value #B": "Since crawl",
+              "server": "Server"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 46,
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 111
+      },
+      "type": "timeseries",
+      "title": "Crawls",
+      "description": "Index crawls per upstream per interval: success, error, skipped (server down; its last crawl is kept).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (server, outcome) (increase(jmp_index_syncs_total{instance=~\"$instance\", server=~\"$server\"}[$__rate_interval]))",
+          "legendFormat": "{{server}} {{outcome}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "fillOpacity": 55,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "axisSoftMax": 1
+          },
+          "min": 0,
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 47,
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 111
+      },
+      "type": "timeseries",
+      "title": "Crawl and rebuild time (p95)",
+      "description": "95th percentile duration of one upstream's crawl, and of rebuilding the merged snapshot (grouping, ranking, canonical ids).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (server, le) (rate(jmp_index_sync_duration_seconds_bucket{instance=~\"$instance\", server=~\"$server\"}[$__rate_interval])))",
+          "legendFormat": "crawl {{server}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(jmp_index_build_duration_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])))",
+          "legendFormat": "rebuild",
+          "range": true,
+          "instant": false,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Catalog cache",
+      "collapsed": false,
+      "panels": [],
+      "id": 48,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 118
+      }
+    },
+    {
+      "id": 49,
+      "gridPos": {
+        "h": 8,
+        "w": 4,
+        "x": 0,
+        "y": 119
       },
       "type": "stat",
       "title": "Cache hit ratio",
@@ -4088,12 +4741,12 @@
       }
     },
     {
-      "id": 43,
+      "id": 50,
       "gridPos": {
         "h": 8,
         "w": 10,
         "x": 4,
-        "y": 103
+        "y": 119
       },
       "type": "timeseries",
       "title": "Cache lookups",
@@ -4204,12 +4857,12 @@
       }
     },
     {
-      "id": 44,
+      "id": 51,
       "gridPos": {
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 103
+        "y": 119
       },
       "type": "timeseries",
       "title": "Catalog refresh time (p95)",
@@ -4274,12 +4927,12 @@
       }
     },
     {
-      "id": 45,
+      "id": 52,
       "gridPos": {
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 111
+        "y": 127
       },
       "type": "table",
       "title": "Cache by upstream",
@@ -4505,12 +5158,12 @@
       ]
     },
     {
-      "id": 46,
+      "id": 53,
       "gridPos": {
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 111
+        "y": 127
       },
       "type": "timeseries",
       "title": "Refresh failures & evictions",
@@ -4630,21 +5283,21 @@
       "title": "Clients & auth",
       "collapsed": false,
       "panels": [],
-      "id": 47,
+      "id": 54,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 117
+        "y": 133
       }
     },
     {
-      "id": 48,
+      "id": 55,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 118
+        "y": 134
       },
       "type": "timeseries",
       "title": "Proxy logins",
@@ -4772,12 +5425,12 @@
       }
     },
     {
-      "id": 49,
+      "id": 56,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 118
+        "y": 134
       },
       "type": "timeseries",
       "title": "Client token checks",
@@ -4903,12 +5556,12 @@
       }
     },
     {
-      "id": 50,
+      "id": 57,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 118
+        "y": 134
       },
       "type": "timeseries",
       "title": "Password hashing (argon2 p95)",
@@ -4977,21 +5630,21 @@
       "title": "Configuration & TLS",
       "collapsed": false,
       "panels": [],
-      "id": 51,
+      "id": 58,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 125
+        "y": 141
       }
     },
     {
-      "id": 52,
+      "id": 59,
       "gridPos": {
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 126
+        "y": 142
       },
       "type": "stat",
       "title": "Version",
@@ -5051,12 +5704,12 @@
       }
     },
     {
-      "id": 53,
+      "id": 60,
       "gridPos": {
         "h": 4,
         "w": 6,
         "x": 6,
-        "y": 126
+        "y": 142
       },
       "type": "stat",
       "title": "Uptime",
@@ -5117,12 +5770,12 @@
       }
     },
     {
-      "id": 54,
+      "id": 61,
       "gridPos": {
         "h": 4,
         "w": 6,
         "x": 12,
-        "y": 126
+        "y": 142
       },
       "type": "stat",
       "title": "Config applied",
@@ -5183,12 +5836,12 @@
       }
     },
     {
-      "id": 55,
+      "id": 62,
       "gridPos": {
         "h": 4,
         "w": 6,
         "x": 18,
-        "y": 126
+        "y": 142
       },
       "type": "stat",
       "title": "Upstreams configured",
@@ -5248,12 +5901,12 @@
       }
     },
     {
-      "id": 56,
+      "id": 63,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 130
+        "y": 146
       },
       "type": "timeseries",
       "title": "Config reloads",
@@ -5366,12 +6019,12 @@
       }
     },
     {
-      "id": 57,
+      "id": 64,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 130
+        "y": 146
       },
       "type": "timeseries",
       "title": "Upstream changes on reload",
@@ -5499,12 +6152,12 @@
       }
     },
     {
-      "id": 58,
+      "id": 65,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 130
+        "y": 146
       },
       "type": "timeseries",
       "title": "Backends",
@@ -5640,12 +6293,12 @@
       }
     },
     {
-      "id": 59,
+      "id": 66,
       "gridPos": {
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 137
+        "y": 153
       },
       "type": "table",
       "title": "TLS certificates",
@@ -5839,12 +6492,12 @@
       ]
     },
     {
-      "id": 60,
+      "id": 67,
       "gridPos": {
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 137
+        "y": 153
       },
       "type": "timeseries",
       "title": "TLS reloads",
@@ -5976,21 +6629,21 @@
       "title": "Process",
       "collapsed": false,
       "panels": [],
-      "id": 61,
+      "id": 68,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 143
+        "y": 159
       }
     },
     {
-      "id": 62,
+      "id": 69,
       "gridPos": {
         "h": 7,
         "w": 6,
         "x": 0,
-        "y": 144
+        "y": 160
       },
       "type": "timeseries",
       "title": "CPU",
@@ -6056,12 +6709,12 @@
       }
     },
     {
-      "id": 63,
+      "id": 70,
       "gridPos": {
         "h": 7,
         "w": 6,
         "x": 6,
-        "y": 144
+        "y": 160
       },
       "type": "timeseries",
       "title": "Memory",
@@ -6127,12 +6780,12 @@
       }
     },
     {
-      "id": 64,
+      "id": 71,
       "gridPos": {
         "h": 7,
         "w": 6,
         "x": 12,
-        "y": 144
+        "y": 160
       },
       "type": "timeseries",
       "title": "Open file descriptors",
@@ -6198,12 +6851,12 @@
       }
     },
     {
-      "id": 65,
+      "id": 72,
       "gridPos": {
         "h": 7,
         "w": 6,
         "x": 18,
-        "y": 144
+        "y": 160
       },
       "type": "timeseries",
       "title": "Tokio runtime",
