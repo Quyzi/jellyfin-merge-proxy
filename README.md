@@ -642,7 +642,10 @@ Answered by the proxy itself:
 | `GET /UserItems/Resume`, `/Shows/NextUp` | from the index and per-user state (`[userdata]`); fan-out while the index is cold or `[userdata]` is off |
 | `POST/DELETE /UserPlayedItems/{id}`, `/UserFavoriteItems/{id}`, `/UserItems/{id}/Rating`; `GET/POST /UserItems/{id}/UserData` (and `/Users/{u}/...` forms) | per-user state, written through to every copy (`[userdata]`); forwarded to the owner when off |
 | `GET /Shows/{id}/Seasons`, `/Shows/{id}/Episodes` | for a series that is on several servers (with `dedupe`): fan-out to every copy, seasons merged by number, episodes by season+episode number (priority winner kept); otherwise routed to the owner |
-| `GET /Items/Filters(2)`, `/Items/Counts` | merged objects |
+| `GET /Genres`, `/Studios`, `/Persons` | from the index: names merged across servers, exact totals and paging; each DTO is the upstream's own (images, `UserData`) fetched from one member server, with Jellyfin's per-type counts when `IncludeItemTypes` is sent; fan-out while the index is cold |
+| `GET /Years` | fan-out, merged by name |
+| `GET /Items/Filters`, `/Items/Filters2` | from the index (genres, tags, ratings, years); `Filters2` keys the index does not keep (audio/subtitle languages) are unioned from the live servers |
+| `GET /Items/Counts` | per-type counts from the index (merged copies counted once); `ItemCount` is the servers' sum less the merged copies |
 | `GET/POST /Sessions*`, `/Sessions/Playing/Ping`, `/DisplayPreferences/{id}`, `/SyncPlay/*`, `/Plugins`, ... | local stubs |
 | `/socket` | WebSocket keep-alive only |
 
@@ -777,19 +780,28 @@ catalog index (exact totals and deep paging, every sort key compared with
 each upstream's own order, genre/person filters across servers, split shows,
 stable canonical ids across restarts), per-user accounts and parental limits
 (own upstream user, encryption on disk, hiding with exact totals, 404s, hot
-reload) and eleven config scenarios
+reload) client compatibility (`compat_single`: about 40 requests jellyfin-web,
+Android TV and Swiftfin send, answered by the proxy in front of one server
+and compared key by key with that server's own answer; `compat_merged`:
+the same requests across three servers give the union, once each) and
+eleven config scenarios
 (merge/dedupe/priority, server down and back, API key upstream, HTTPS
 upstream, TLS listener, hot reload, cache, `unknown_routes`).
 Set `JMP_IMAGE` to run the proxy from the container image instead of the
 binary. Details: [`scripts/real-jellyfin/README.md`](scripts/real-jellyfin/README.md).
-Bugs it found have regression tests in `tests/real_jellyfin_regressions.rs`.
+Bugs it found have regression tests in `tests/real_jellyfin_regressions.rs`;
+`tests/client_compat/` runs the client contract (totals, paging, sorting,
+filters, name DTOs, NextUp across a split show, Resume, favourites, two
+users) in CI against two fake upstreams.
 
 ## Limitations
 
 * **Tested against real Jellyfin servers, not real client apps.** The
-  real-server suite (Jellyfin 12.4.0) issues the HTTP calls a client makes
-  with curl; no TV, phone or desktop app has been tried, so no
-  client-compatibility claims are made.
+  real-server suite (Jellyfin 12.4.0) issues the HTTP calls clients make
+  with curl and compares the proxy's answers with the server's own
+  (`compat_single`); no TV, phone or desktop app has been tried. The
+  comparison covers keys, JSON types, order, totals and image tags, not
+  every value of every field, and only the requests in the scenario.
 * **Upstream identity is shared unless configured.** Proxy users without a
   `[[user.account]]` for a server use that server's shared account: its
   native-client state (what `write_through` updates), its parental settings,
@@ -815,7 +827,14 @@ Bugs it found have regression tests in `tests/real_jellyfin_regressions.rs`.
   only visible through fan-out endpoints. While a live server has never been
   crawled (just added), library queries use live fan-out.
 * **`Years`, `MusicGenres`, `Artists`** and other name lists not listed
-  above are still per-upstream fan-out lists merged by name.
+  above are per-upstream fan-out lists merged by name (no exact totals with
+  `Limit`).
+* **Genre/studio/person DTOs** come from one member server, so their image
+  is that server's; their item counts are computed by the proxy the way
+  Jellyfin 12 does for the tested cases (episodes count under their series'
+  studios, seasons not at all), which may differ for music or mixed
+  libraries. `Items/Filters` without a `ParentId` returns the whole merged
+  library (Jellyfin returns empty lists).
 * **WebSocket** only answers keep-alives; no remote control, no server-pushed
   library/playstate updates.
 * **No** SyncPlay, Live TV, admin dashboard, user management, Quick Connect,
