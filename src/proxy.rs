@@ -346,6 +346,7 @@ pub fn display_prefs(st: &Shared, r: &Req, c: &Client) -> Response {
 mod admin;
 mod context;
 mod fan;
+mod fetch;
 mod forward;
 mod indexed;
 mod indexed_names;
