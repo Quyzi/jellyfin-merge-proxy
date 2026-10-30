@@ -161,6 +161,18 @@ fn enabled(cfg: &Config) -> impl Iterator<Item = &UpstreamConfig> {
     cfg.upstreams.iter().filter(|u| u.enabled)
 }
 
+/// Exports `jmp_upstream_configured{server}`: 1 while the `[[server]]` is
+/// enabled in the applied config, 0 once it is removed or set `enabled = false`.
+/// Health dashboards and alerts join `jmp_upstream_up` with it, so a removed
+/// server's last `jmp_upstream_up` sample is not read as "down".
+pub fn set_configured(server: &str, configured: bool) {
+    gauge!(names::UPSTREAM_CONFIGURED, "server" => server.to_string()).set(if configured {
+        1.0
+    } else {
+        0.0
+    });
+}
+
 /// Keeps the live [`BackendSet`] in sync with `[[server]]` (see module docs).
 pub struct BackendManager {
     set: Arc<ArcSwap<BackendSet>>,
@@ -300,9 +312,16 @@ impl Reloadable for BackendManager {
                 counter!(names::CONFIG_UPSTREAM_CHANGES, "change" => "removed").increment(1);
                 tracing::info!(upstream = %old.name(), "[[server]] removed");
                 self.catalog.invalidate_server(old.name());
-                gauge!(names::UPSTREAM_UP, "server" => old.name().to_string()).set(0.0);
+                // Its last `jmp_upstream_up` stays exported (the recorder cannot
+                // drop series); configured=0 tells dashboards and alerts to ignore it.
+                set_configured(old.name(), false);
                 retired.push(old.clone());
             }
+        }
+        // Every live backend (kept, added, rebuilt, or an old one kept after a
+        // failed rebuild) is configured; this also re-marks a re-added server.
+        for b in &list {
+            set_configured(b.name(), true);
         }
         if changed {
             // Atomic swap: requests that already loaded `cur` finish on it.
