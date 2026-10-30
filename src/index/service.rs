@@ -120,6 +120,12 @@ impl IndexService {
     }
 
     /// The group (copies on several servers) `id` belongs to, if any.
+    /// The last built snapshot, warm or not (per-item lookups that do not
+    /// need every server covered).
+    pub fn latest(&self) -> Option<Arc<Snapshot>> {
+        self.snap.load_full()
+    }
+
     pub fn group(&self, id: &ProxyItemId) -> Option<Arc<super::groups::Group>> {
         use super::groups::GroupLookup;
         self.groups.group(id)

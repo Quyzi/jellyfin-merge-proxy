@@ -1,5 +1,6 @@
-//! Durable proxy state: id mappings, series sibling links, sessions and
-//! the catalog index ([`IndexStore`]).
+//! Durable proxy state: id mappings, series sibling links, sessions, the
+//! catalog index ([`IndexStore`]) and per-user watch state
+//! ([`UserDataStore`]).
 //!
 //! The in-memory tables ([`crate::ids::HashedIdTable`],
 //! [`crate::siblings::SiblingTable`], [`crate::auth::Sessions`]) stay the
@@ -21,10 +22,13 @@ mod memory;
 pub mod migrations;
 mod sqlite;
 mod sqlite_index;
+mod sqlite_userdata;
+pub mod userdata;
 
 pub use index::{IndexStore, StoredServerIndex, StoredView};
 pub use memory::MemoryStore;
 pub use sqlite::{apply_journal_mode, publish_journal_mode, SqliteStore};
+pub use userdata::{UserDataRow, UserDataStore};
 
 /// Errors from a [`Store`].
 #[derive(Debug, thiserror::Error)]
@@ -92,7 +96,7 @@ impl ImportBatch {
 }
 
 /// All proxy state behind one handle.
-pub trait Store: IdStore + SiblingStore + SessionStore + IndexStore {
+pub trait Store: IdStore + SiblingStore + SessionStore + IndexStore + UserDataStore {
     /// Short name for logs ("sqlite", "memory").
     fn kind(&self) -> &'static str;
 

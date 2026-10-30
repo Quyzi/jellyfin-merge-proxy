@@ -26,6 +26,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "index",
         sql: include_str!("migrations/0002_index.sql"),
     },
+    Migration {
+        version: 3,
+        name: "userdata",
+        sql: include_str!("migrations/0003_userdata.sql"),
+    },
 ];
 
 /// Schema version this binary writes.
@@ -95,7 +100,9 @@ mod tests {
                 "index_servers",
                 "merged_views",
                 "sessions",
-                "sibling_links"
+                "sibling_links",
+                "user_data",
+                "user_data_seeded"
             ]
         );
         // Running again is a no-op (the CREATE TABLEs would fail otherwise).
