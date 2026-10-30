@@ -227,6 +227,10 @@ pub async fn indexed_show_children(
 ) -> Option<Result<Response>> {
     let endpoint = if episodes { "episodes" } else { "seasons" };
     let series = r.segs.get(1)?.clone();
+    let sid = crate::types::normalize_hex_id(&series).and_then(|n| ProxyItemId::parse(&n));
+    if sid.is_some_and(|id| st.parental.blocks(&c.user_id, &id)) {
+        return Some(Ok(err_resp(StatusCode::NOT_FOUND, "Item not found")));
+    }
     let mut q: Vec<(String, String)> = r
         .query
         .iter()

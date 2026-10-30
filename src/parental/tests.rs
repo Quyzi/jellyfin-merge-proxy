@@ -121,3 +121,15 @@ fn service_resolves_names_and_reloads() {
     assert!(rt.block_on(svc.apply(&cx)).unwrap());
     assert_eq!(svc.policy(&kid, Some(&snap)).unwrap().max, 17);
 }
+
+#[test]
+fn without_an_index_rated_videos_fail_closed() {
+    let r = json!({"Id": "f".repeat(32), "Type": "Movie", "OfficialRating": "G"});
+    let unrated = json!({"Id": "e".repeat(32), "Type": "Movie"});
+    let folder = json!({"Type": "CollectionFolder", "OfficialRating": "G"});
+    assert!(!dto_allowed(&PG, None, &r));
+    assert!(dto_allowed(&PG, None, &unrated));
+    assert!(dto_allowed(&PG, None, &folder));
+    let mut page = vec![r, unrated, folder];
+    assert_eq!(super::filter::retain_page(&PG, None, &mut page), 1);
+}

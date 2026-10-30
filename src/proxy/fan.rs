@@ -131,10 +131,12 @@ pub async fn fan_list_on(
             _ => None,
         });
         let mut items = items.unwrap_or_default();
-        total += t.map(|t| t as usize).unwrap_or(items.len());
+        let upstream_total = t.map(|t| t as usize).unwrap_or(items.len());
         for it in items.iter_mut() {
             st.rewriters.rewrite_json(it, &ctx);
         }
+        let hidden = st.parental.retain_dtos(&c.user_id, &mut items);
+        total += upstream_total.saturating_sub(hidden);
         let (priority, server) = (up.priority(), up.id());
         all.extend(items.into_iter().map(|item| Ranked {
             priority,

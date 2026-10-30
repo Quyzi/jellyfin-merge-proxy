@@ -40,6 +40,13 @@ pub fn dto_allowed(p: &RatingPolicy, snap: Option<&Snapshot>, v: &Value) -> bool
     if let (Some(s), Some(i)) = (snap, idx("Id").or_else(|| idx("ItemId"))) {
         return allows_item(p, s, i);
     }
+    let Some(snap) = snap else {
+        // No rating tables yet (index not built): fail closed for rated
+        // video items, whose rating cannot be scored.
+        let rated = str_of(v, "OfficialRating").is_some_and(|r| !r.is_empty());
+        return !(rated && super::UNRATED_KINDS.contains(&kind)) && p.allows(None, kind);
+    };
+    let snap = Some(snap);
     let own = str_of(v, "OfficialRating")
         .and_then(|r| snap.and_then(|s| s.ratings.get(&r.to_lowercase()).copied()));
     let score = own.or_else(|| {
@@ -51,7 +58,7 @@ pub fn dto_allowed(p: &RatingPolicy, snap: Option<&Snapshot>, v: &Value) -> bool
 }
 
 /// Filter `arr` in place; returns how many were removed.
-fn retain(p: &RatingPolicy, snap: Option<&Snapshot>, arr: &mut Vec<Value>) -> usize {
+pub fn retain_page(p: &RatingPolicy, snap: Option<&Snapshot>, arr: &mut Vec<Value>) -> usize {
     let before = arr.len();
     arr.retain(|v| dto_allowed(p, snap, v));
     before - arr.len()
@@ -59,12 +66,12 @@ fn retain(p: &RatingPolicy, snap: Option<&Snapshot>, arr: &mut Vec<Value>) -> us
 
 pub fn apply(p: &RatingPolicy, snap: Option<&Snapshot>, v: &mut Value) -> usize {
     match v {
-        Value::Array(a) => retain(p, snap, a),
+        Value::Array(a) => retain_page(p, snap, a),
         Value::Object(m) => {
             let mut removed = 0;
             for key in ["Items", "SearchHints"] {
                 if let Some(Value::Array(a)) = m.get_mut(key) {
-                    removed += retain(p, snap, a);
+                    removed += retain_page(p, snap, a);
                 }
             }
             if removed > 0 {
