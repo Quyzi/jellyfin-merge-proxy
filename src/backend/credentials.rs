@@ -5,7 +5,7 @@
 //! an [`AuthChannel`], so the same credential types work for any backend
 //! that can carry Jellyfin-style auth calls.
 
-use crate::config::{Secret, UpstreamConfig};
+use crate::config::{Secret, UpstreamAccount, UpstreamConfig};
 use crate::error::BackendError;
 use async_trait::async_trait;
 use reqwest::{Method, StatusCode};
@@ -147,16 +147,30 @@ impl UpstreamCredentials for PasswordCredentials {
 
 /// Pick the credential type for a `[[server]]` entry (api_key wins).
 pub fn from_config(cfg: &UpstreamConfig) -> Arc<dyn UpstreamCredentials> {
-    match &cfg.api_key {
+    pick(&cfg.api_key, &cfg.username, &cfg.password, &cfg.user_id)
+}
+
+/// The same for a per-user `[[user.account]]`.
+pub fn from_account(cfg: &UpstreamAccount) -> Arc<dyn UpstreamCredentials> {
+    pick(&cfg.api_key, &cfg.username, &cfg.password, &cfg.user_id)
+}
+
+fn pick(
+    api_key: &Option<Secret>,
+    user: &Option<String>,
+    password: &Option<Secret>,
+    user_id: &Option<String>,
+) -> Arc<dyn UpstreamCredentials> {
+    match api_key {
         Some(k) => Arc::new(ApiKeyCredentials {
             key: k.clone(),
-            user: cfg.username.clone(),
-            user_id: cfg.user_id.clone(),
+            user: user.clone(),
+            user_id: user_id.clone(),
         }),
         None => Arc::new(PasswordCredentials {
-            user: cfg.username.clone().unwrap_or_default(),
-            password: cfg.password.clone().unwrap_or_else(|| Secret::new("")),
-            user_id: cfg.user_id.clone(),
+            user: user.clone().unwrap_or_default(),
+            password: password.clone().unwrap_or_else(|| Secret::new("")),
+            user_id: user_id.clone(),
         }),
     }
 }

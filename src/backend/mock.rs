@@ -204,6 +204,7 @@ impl MediaBackend for MockBackend {
             version: Some("10.10.7".into()),
             user_id: Some(self.user_id.clone()),
             token_age_secs: None,
+            user_accounts: 0,
             modern_api: true,
         }
     }

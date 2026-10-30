@@ -12,6 +12,7 @@
 //! [`credentials::UpstreamCredentials`]; HTTP itself goes through
 //! [`transport::Transport`] (decorated with metrics by `Instrumented`).
 
+pub mod accounts;
 pub mod credentials;
 pub mod jellyfin;
 pub mod mock;
@@ -104,6 +105,9 @@ pub struct BackendRequest {
     pub body: Option<Bytes>,
     /// Long-lived body (media, HLS): no total timeout, no redirects.
     pub streaming: bool,
+    /// Proxy user id to act for: their `[[user.account]]` on this server
+    /// if they have one, else the shared account.
+    pub as_user: Option<String>,
 }
 
 impl BackendRequest {
@@ -114,6 +118,7 @@ impl BackendRequest {
             headers: HeaderMap::new(),
             body: None,
             streaming: false,
+            as_user: None,
         }
     }
     pub fn get(path_and_query: impl Into<String>) -> Self {
@@ -129,6 +134,10 @@ impl BackendRequest {
     }
     pub fn streaming(mut self, s: bool) -> Self {
         self.streaming = s;
+        self
+    }
+    pub fn as_user(mut self, user: Option<&str>) -> Self {
+        self.as_user = user.map(String::from);
         self
     }
 }
@@ -203,6 +212,8 @@ pub struct BackendStatus {
     pub user_id: Option<String>,
     pub token_age_secs: Option<u64>,
     pub modern_api: bool,
+    /// Proxy users with their own account on this server.
+    pub user_accounts: usize,
 }
 
 /// An upstream media server.
@@ -235,10 +246,32 @@ pub trait MediaBackend: Reloadable + Send + Sync {
 
     /// GET a JSON document. Non-2xx yields `(status, Null)`.
     async fn get_json(&self, path_and_query: &str) -> Result<(StatusCode, Value), BackendError> {
+        self.get_json_as(None, path_and_query).await
+    }
+
+    /// Whether this proxy user has their own account on this server.
+    fn has_account(&self, _user: &str) -> bool {
+        false
+    }
+
+    /// Log in (the user's own account if they have one, else the shared
+    /// one) and return the session to address the upstream with.
+    async fn login_as(&self, user: Option<&str>) -> Result<SessionInfo, BackendError> {
+        let _ = user;
+        self.ensure_login().await?;
+        Ok(self.session().await)
+    }
+
+    /// `get_json` acting for a proxy user (see [`BackendRequest::as_user`]).
+    async fn get_json_as(
+        &self,
+        user: Option<&str>,
+        path_and_query: &str,
+    ) -> Result<(StatusCode, Value), BackendError> {
         let mut h = HeaderMap::new();
         h.insert("Accept", HeaderValue::from_static("application/json"));
         let r = self
-            .send(BackendRequest::get(path_and_query).headers(h))
+            .send(BackendRequest::get(path_and_query).headers(h).as_user(user))
             .await?;
         let status = r.status;
         if !status.is_success() {
