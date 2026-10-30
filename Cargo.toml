@@ -54,7 +54,7 @@ rustls-native-certs = "0.8"
 rustls-pki-types = { version = "1", features = ["std"] }
 
 # Security
-argon2 = "0.5"
+argon2 = "0.6"
 
 # Metrics
 metrics = "0.24"
