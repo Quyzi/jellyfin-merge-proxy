@@ -86,11 +86,17 @@ impl ParentalService {
         Some((p, snap))
     }
 
-    /// Whether `user` may not see indexed item `id` (unknown items pass;
-    /// fan-out responses are filtered by [`super::filter::ParentalFilter`]).
+    /// Whether `user` may not see item `id`. Indexed items are judged by
+    /// rating; items the index does not hold pass (fan-out responses are
+    /// filtered by [`super::filter::ParentalFilter`]). A restricted user
+    /// before the first index exists fails closed: nothing can be rated.
     pub fn blocks(&self, user: &str, id: &ProxyItemId) -> bool {
-        let Some((p, Some(snap))) = self.current(user) else {
+        let Some((p, snap)) = self.current(user) else {
             return false;
+        };
+        let Some(snap) = snap else {
+            counter!(names::PARENTAL_HIDDEN, "source" => "item").increment(1);
+            return true;
         };
         let blocked = snap
             .item_index(id)

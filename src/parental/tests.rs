@@ -133,3 +133,39 @@ fn without_an_index_rated_videos_fail_closed() {
     let mut page = vec![r, unrated, folder];
     assert_eq!(super::filter::retain_page(&PG, None, &mut page), 1);
 }
+
+/// Before the first index build a restricted user's items cannot be rated,
+/// so `blocks` fails closed (as the list paths do) instead of letting
+/// playback commands, playlists and item routes through; unrestricted users
+/// are unaffected.
+#[test]
+fn without_an_index_item_checks_fail_closed() {
+    let cache = crate::config::PasswordCache::default();
+    let text = r#"
+[proxy]
+listen = "127.0.0.1:0"
+[[user]]
+name = "kid"
+password = "pw"
+max_parental_rating = "PG"
+[[user]]
+name = "adult"
+password = "pw"
+[[server]]
+name = "s1"
+server = "http://s1:8096"
+user = "u"
+password = "p"
+"#;
+    let cfg = Config::parse(text, &cache).unwrap();
+    let index = Arc::new(crate::index::service::IndexService::new(
+        Arc::new(crate::store::MemoryStore::new()),
+        Arc::new(crate::servers::ServerRegistry::new()),
+        Arc::new(crate::index::groups::CanonicalGroups::new()),
+        100,
+    ));
+    let svc = service::ParentalService::new(&cfg, index);
+    let id = crate::types::ProxyItemId::parse(&"a".repeat(32)).unwrap();
+    assert!(svc.blocks(&crate::users::user_id_for("kid"), &id));
+    assert!(!svc.blocks(&crate::users::user_id_for("adult"), &id));
+}
