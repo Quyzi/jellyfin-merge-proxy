@@ -159,7 +159,10 @@ fn parental_blocked(st: &Shared, c: &Client, segs: &[String]) -> bool {
     }
     segs.iter()
         .filter(|s| looks_like_id(s))
-        .filter_map(|s| normalize_hex_id(s).and_then(|n| crate::types::ProxyItemId::parse(&n)))
+        .filter_map(|s| normalize_hex_id(s))
+        // The user's own id and the root folder are not items.
+        .filter(|n| !st.is_proxy_user(n) && *n != st.root_id)
+        .filter_map(|n| crate::types::ProxyItemId::parse(&n))
         .any(|id| st.parental.blocks(&c.user_id, &id))
 }
 

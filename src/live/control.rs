@@ -278,7 +278,13 @@ pub async fn expand_play(
         }
     }
     // Never send ids the target user may not see (as `LibraryChanged` does).
-    items.retain(|i| ProxyItemId::parse(i).is_none_or(|p| !st.parental.blocks(target_user, &p)));
+    // An id that is not a proxy id cannot be rated: it only passes for an
+    // unrestricted user.
+    let restricted = st.parental.restricted(target_user);
+    items.retain(|i| match ProxyItemId::parse(i) {
+        Some(p) => !st.parental.blocks(target_user, &p),
+        None => !restricted,
+    });
     (items, cmd)
 }
 
