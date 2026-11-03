@@ -36,14 +36,17 @@ fn limits_of(cfg: &Config) -> HashMap<String, UserLimit> {
 pub struct ParentalService {
     limits: ArcSwap<HashMap<String, UserLimit>>,
     index: Arc<IndexService>,
+    /// Finds the server of an id the index does not hold.
+    ids: Arc<dyn crate::ids::IdMapper>,
     warned: Mutex<HashSet<String>>,
 }
 
 impl ParentalService {
-    pub fn new(cfg: &Config, index: Arc<IndexService>) -> Self {
+    pub fn new(cfg: &Config, index: Arc<IndexService>, ids: Arc<dyn crate::ids::IdMapper>) -> Self {
         ParentalService {
             limits: ArcSwap::from_pointee(limits_of(cfg)),
             index,
+            ids,
             warned: Mutex::new(HashSet::new()),
         }
     }
@@ -87,9 +90,12 @@ impl ParentalService {
     }
 
     /// Whether `user` may not see item `id`. Indexed items are judged by
-    /// rating; items the index does not hold pass (fan-out responses are
-    /// filtered by [`super::filter::ParentalFilter`]). A restricted user
-    /// before the first index exists fails closed: nothing can be rated.
+    /// rating. For a restricted user this fails closed: before the first
+    /// index exists everything is blocked, and an id the index does not
+    /// hold is blocked while its server is live but not crawled yet. Other
+    /// unknown ids (kinds the index does not keep, items newer than the last
+    /// crawl) pass; fan-out lists are filtered by
+    /// [`super::filter::ParentalFilter`].
     pub fn blocks(&self, user: &str, id: &ProxyItemId) -> bool {
         let Some((p, snap)) = self.current(user) else {
             return false;
@@ -98,9 +104,13 @@ impl ParentalService {
             counter!(names::PARENTAL_HIDDEN, "source" => "item").increment(1);
             return true;
         };
-        let blocked = snap
-            .item_index(id)
-            .is_some_and(|i| !allows_item(&p, &snap, i));
+        let blocked = match snap.item_index(id) {
+            Some(i) => !allows_item(&p, &snap, i),
+            None => matches!(
+                self.ids.decode(id),
+                Some(crate::ids::Target::Item { upstream, .. }) if self.index.is_uncovered(upstream)
+            ),
+        };
         if blocked {
             counter!(names::PARENTAL_HIDDEN, "source" => "item").increment(1);
         }

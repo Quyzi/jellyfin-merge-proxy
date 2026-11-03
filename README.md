@@ -253,9 +253,10 @@ shown when its rating score is at most the limit, and unrated videos, series
 and collections are hidden only with `block_unrated`. Episodes and seasons
 inherit their series' rating. Rating names are resolved through the servers'
 rating tables, collected by the crawl. Limits **fail closed**: an unknown
-rating name allows only score 0, and until the first crawl of at least one
-server a restricted user sees no individual items and no rated videos in
-lists. Limits are judged against the index, so a config that sets one with
+rating name allows only score 0, until the first crawl a restricted user
+sees no individual items and no rated videos in lists, and items of a live
+server the index has not crawled yet (just added, or down when the proxy
+started) cannot be opened until it has been. Limits are judged against the index, so a config that sets one with
 `[index] enabled = false` is rejected.
 Blocked items are left out of lists with exact totals, return 404 when asked
 for directly, and are kept out of NextUp, Resume, search, playlists and

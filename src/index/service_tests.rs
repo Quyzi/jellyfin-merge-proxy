@@ -165,3 +165,50 @@ async fn nothing_crawled_publishes_no_snapshot() {
     svc.rebuild(&cfg, &set, &ids);
     assert!(svc.latest().is_none());
 }
+
+/// A live server the index has not crawled yet (added by a reload, down at
+/// start, or failing to crawl): its items cannot be rated, so a restricted
+/// user may not open them until it is covered. Unknown ids on covered
+/// servers still pass, and unrestricted users are never affected.
+#[tokio::test]
+async fn items_of_an_uncovered_server_are_blocked_for_restricted_users() {
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+    let (reg, _mocks, set, ids) = setup();
+    let ids = Arc::new(ids);
+    let mut cfg = config(true);
+    let cache = crate::config::PasswordCache::default();
+    let users = Config::parse(
+        &format!(
+            "{}\n[[user]]\nname = \"kid\"\npassword = \"pw\"\nmax_parental_rating = 100\n",
+            "[[server]]\nname = \"a\"\nserver = \"http://a:8096\"\napi_key = \"k\"\nuser = \"u\""
+        ),
+        &cache,
+    )
+    .unwrap();
+    cfg.users = users.users;
+    let svc = Arc::new(IndexService::with_crawler(
+        store,
+        reg.clone(),
+        Arc::new(CanonicalGroups::new()),
+        Box::new(FakeCrawler),
+    ));
+    let parental = crate::parental::service::ParentalService::new(&cfg, svc.clone(), ids.clone());
+    svc.crawl_all(&set[..1]).await;
+    svc.note_coverage(&set);
+    svc.rebuild(&cfg, &set, ids.as_ref());
+    let kid = crate::users::user_id_for("kid");
+    let on = |s: usize, n: u64| {
+        let up = crate::types::UpstreamItemId::parse(&format!("{n:032x}")).unwrap();
+        ids.encode(set[s].id(), &up).id
+    };
+    assert!(parental.blocks(&kid, &on(1, 77)), "b is live and uncovered");
+    assert!(
+        !parental.blocks(&kid, &on(0, 77)),
+        "a is covered: unknown id passes"
+    );
+    assert!(!parental.blocks(&crate::users::user_id_for("me"), &on(1, 77)));
+    svc.crawl_all(&set).await;
+    svc.note_coverage(&set);
+    svc.rebuild(&cfg, &set, ids.as_ref());
+    assert!(!parental.blocks(&kid, &on(1, 77)), "b crawled");
+}

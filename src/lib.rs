@@ -195,7 +195,11 @@ impl AppState {
         rewriters.push(Box::new(rewrite::MeteredRewriter(
             userdata::view::UserDataOverlay::new(userdata.clone()),
         )));
-        let parental = Arc::new(parental::service::ParentalService::new(&cfg, index.clone()));
+        let parental = Arc::new(parental::service::ParentalService::new(
+            &cfg,
+            index.clone(),
+            ids.clone(),
+        ));
         rewriters.push(Box::new(rewrite::MeteredRewriter(
             parental::filter::ParentalFilter::new(parental.clone()),
         )));

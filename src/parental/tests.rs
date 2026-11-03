@@ -97,7 +97,10 @@ fn service_resolves_names_and_reloads() {
         Arc::new(crate::index::groups::CanonicalGroups::new()),
         100,
     ));
-    let svc = service::ParentalService::new(&cfg, index);
+    let ids = Arc::new(crate::ids::HashedIdTable::new(
+        crate::servers::ServerRegistry::with_names(["a"]),
+    ));
+    let svc = service::ParentalService::new(&cfg, index, ids);
     let kid = crate::users::user_id_for("kid");
     let adult = crate::users::user_id_for("adult");
     let snap = snapshot();
@@ -158,13 +161,15 @@ user = "u"
 password = "p"
 "#;
     let cfg = Config::parse(text, &cache).unwrap();
+    let reg = Arc::new(crate::servers::ServerRegistry::new());
     let index = Arc::new(crate::index::service::IndexService::new(
         Arc::new(crate::store::MemoryStore::new()),
-        Arc::new(crate::servers::ServerRegistry::new()),
+        reg.clone(),
         Arc::new(crate::index::groups::CanonicalGroups::new()),
         100,
     ));
-    let svc = service::ParentalService::new(&cfg, index);
+    let ids = Arc::new(crate::ids::HashedIdTable::new(reg));
+    let svc = service::ParentalService::new(&cfg, index, ids);
     let id = crate::types::ProxyItemId::parse(&"a".repeat(32)).unwrap();
     assert!(svc.blocks(&crate::users::user_id_for("kid"), &id));
     assert!(!svc.blocks(&crate::users::user_id_for("adult"), &id));

@@ -183,7 +183,9 @@ Seeder: user with an account imports from it (mark "server#account"), others sha
   (lowercased). Unknown limit names, or no index yet, fail closed (score 0);
   without rating tables, rated videos in fan-out pages are hidden and
   `blocks` refuses every item. A snapshot is only published once at least
-  one server has been crawled, and `Config::validate` rejects limits when
+  one server has been crawled; after that `blocks` also refuses ids the
+  snapshot lacks when they decode to a live server the index does not cover
+  yet (`IndexService::note_coverage`, refreshed every index tick), and `Config::validate` rejects limits when
   `[index] enabled = false` (the index would never exist).
 * Account secrets are decrypted with the `[[server]]` cipher and rewritten
   as `enc:v1:` by `config_rewrite::rewrite_user_accounts`. Tokens are only
