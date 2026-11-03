@@ -12,6 +12,9 @@ use crate::config::UserDataConfig;
 use serde_json::Value;
 
 const TICKS_PER_SEC: i64 = 10_000_000;
+/// `ServerConfiguration.MinAudiobookResume` / `MaxAudiobookResume`.
+const MIN_AUDIOBOOK_RESUME_MIN: i64 = 5;
+const MAX_AUDIOBOOK_RESUME_MIN: i64 = 5;
 
 /// Resume thresholds.
 #[derive(Debug, Clone, Copy)]
@@ -37,71 +40,155 @@ impl Default for ResumeRules {
     }
 }
 
-/// `POST UserPlayedItems/{id}` (`played`) / `DELETE` (`!played`).
-pub fn mark_played(s: &mut ItemState, played: bool, now: &str) {
+/// Kinds that have no played status (`SupportsPlayedStatus` is false).
+/// `None` (kind unknown) supports it.
+pub fn supports_played(kind: Option<&str>) -> bool {
+    !matches!(
+        kind,
+        Some(
+            "CollectionFolder"
+                | "UserView"
+                | "UserRootFolder"
+                | "AggregateFolder"
+                | "PhotoAlbum"
+                | "Photo"
+                | "MusicAlbum"
+                | "MusicArtist"
+                | "Person"
+                | "Genre"
+                | "MusicGenre"
+                | "Studio"
+                | "Year"
+                | "TvChannel"
+                | "LiveTvChannel"
+                | "Program"
+        )
+    )
+}
+
+/// Kinds that remember a resume position (`SupportsPositionTicksResume`).
+pub fn resumable(kind: Option<&str>) -> bool {
+    kind.is_none_or(|k| {
+        matches!(
+            k,
+            "Movie" | "Episode" | "Video" | "MusicVideo" | "Book" | "AudioBook"
+        )
+    })
+}
+
+/// `POST UserPlayedItems/{id}` (`played`, with the optional `DatePlayed`) /
+/// `DELETE` (`!played`): `BaseItem.MarkPlayed` / `MarkUnplayed`.
+pub fn mark_played(s: &mut ItemState, played: bool, date: Option<&str>, now: &str) {
     if played {
-        s.play_count += 1;
-        s.last_played = Some(now.to_string());
+        if date.is_some() {
+            s.play_count += 1;
+        }
+        s.play_count = s.play_count.max(1);
+        s.last_played = date
+            .map(str::to_string)
+            .or_else(|| s.last_played.take())
+            .or_else(|| Some(now.to_string()));
         s.played = true;
     } else {
-        s.played = false;
         s.play_count = 0;
+        s.last_played = None;
+        s.played = false;
     }
     s.position_ticks = 0;
 }
 
-/// `Sessions/Playing`.
-pub fn start(s: &mut ItemState, now: &str) {
+/// `Sessions/Playing` (`SessionManager.OnPlaybackStart`): counts a play;
+/// media with no resume position is played from the first moment.
+pub fn start(s: &mut ItemState, kind: Option<&str>, now: &str) {
     s.play_count += 1;
     s.last_played = Some(now.to_string());
-    s.played = false;
+    s.played = supports_played(kind) && !resumable(kind);
 }
 
-/// `Sessions/Playing/Progress`.
-pub fn progress(s: &mut ItemState, position: Option<i64>) {
-    if let Some(p) = position {
-        s.position_ticks = p.max(0);
+/// `UserDataManager.UpdatePlayState`. Returns whether the item was played
+/// to completion. Never touches `last_played` or `play_count`.
+pub fn update_play_state(
+    s: &mut ItemState,
+    position: Option<i64>,
+    runtime: Option<i64>,
+    kind: Option<&str>,
+    r: &ResumeRules,
+) -> bool {
+    let rt = runtime.unwrap_or(0);
+    let mut pos = position.unwrap_or(rt);
+    let mut done = false;
+    let book = matches!(kind, Some("AudioBook" | "Book"));
+    if pos > 0 && rt > 0 && !book {
+        let pct = pos as f64 * 100.0 / rt as f64;
+        if pct < r.min_pct {
+            pos = 0;
+        } else if pct > r.max_pct
+            || pos >= rt - TICKS_PER_SEC
+            || (rt / TICKS_PER_SEC) < r.min_duration_secs as i64
+        {
+            pos = 0;
+            done = true;
+        }
+    } else if pos > 0 && rt > 0 && kind == Some("AudioBook") {
+        let minutes_in = pos as f64 / (TICKS_PER_SEC * 60) as f64;
+        let minutes_left = (rt - pos) as f64 / (TICKS_PER_SEC * 60) as f64;
+        if minutes_in < MIN_AUDIOBOOK_RESUME_MIN as f64 {
+            pos = 0;
+        } else if minutes_left < MAX_AUDIOBOOK_RESUME_MIN as f64 || pos >= rt {
+            pos = 0;
+            done = true;
+        }
+    } else if rt <= 0 {
+        pos = 0;
+        done = true;
+    }
+    if done {
+        s.played = true;
+    }
+    if !supports_played(kind) {
+        pos = 0;
+        s.played = false;
+    }
+    if !resumable(kind) {
+        pos = 0;
+    }
+    s.position_ticks = pos;
+    done
+}
+
+/// `Sessions/Playing/Progress`: a reported position updates the state.
+pub fn progress(
+    s: &mut ItemState,
+    position: Option<i64>,
+    runtime: Option<i64>,
+    kind: Option<&str>,
+    r: &ResumeRules,
+) {
+    if position.is_some() {
+        update_play_state(s, position, runtime, kind, r);
     }
 }
 
-/// `Sessions/Playing/Stopped`. Returns whether the item counts as played
-/// to completion.
+/// `Sessions/Playing/Stopped` (`SessionManager.OnPlaybackStopped`).
+/// Returns whether the item counts as played.
 pub fn stopped(
     s: &mut ItemState,
     position: Option<i64>,
     runtime: Option<i64>,
-    rules: &ResumeRules,
-    now: &str,
+    kind: Option<&str>,
+    r: &ResumeRules,
+    failed: bool,
 ) -> bool {
-    let runtime = runtime.filter(|r| *r > 0);
-    let mut pos = position.or(runtime).unwrap_or(0).max(0);
-    let mut done = false;
-    match runtime {
-        Some(rt) if pos > 0 => {
-            let pct = pos as f64 * 100.0 / rt as f64;
-            if pct < rules.min_pct {
-                pos = 0;
-            } else if pct > rules.max_pct
-                || pos >= rt
-                || rt / TICKS_PER_SEC < rules.min_duration_secs as i64
-            {
-                // Watched to the end, or too short to resume.
-                pos = 0;
-                done = true;
-            }
-        }
-        Some(_) => {}
-        None => {
-            pos = 0;
-            done = true;
-        }
+    if failed {
+        return s.played;
     }
-    s.position_ticks = pos;
-    if done {
-        s.played = true;
-        s.last_played = Some(now.to_string());
+    if position.is_some() {
+        return update_play_state(s, position, runtime, kind, r);
     }
-    done
+    s.play_count += 1;
+    s.played = supports_played(kind);
+    s.position_ticks = 0;
+    s.played
 }
 
 /// `POST UserItems/{id}/UserData` (an `UpdateUserItemDataDto`): set the

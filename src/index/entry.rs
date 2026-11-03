@@ -52,12 +52,16 @@ pub struct Entry {
     pub studios: Vec<NameRef>,
     pub people: Vec<NameRef>,
     pub tags: Vec<String>,
+    /// The DTO's `LocationType` (`FileSystem`, `Virtual`, ...); `None` for
+    /// rows crawled before it was recorded.
+    pub location_type: Option<String>,
+    pub original_title: Option<String>,
 }
 
 /// `Fields` the crawler asks for (everything [`Entry::from_dto`] reads that
 /// Jellyfin only sends on request).
 pub const CRAWL_FIELDS: &str = "ProviderIds,Genres,Studios,People,SortName,PremiereDate,\
-DateCreated,ParentId,Tags,OfficialRating,Width,Height";
+DateCreated,ParentId,Tags,OfficialRating,Width,Height,OriginalTitle";
 
 fn s(v: &Value, k: &str) -> Option<String> {
     v.get(k)
@@ -172,6 +176,8 @@ impl Entry {
                         .collect()
                 })
                 .unwrap_or_default(),
+            location_type: s(v, "LocationType"),
+            original_title: s(v, "OriginalTitle"),
         })
     }
 

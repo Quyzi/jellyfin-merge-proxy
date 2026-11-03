@@ -1,10 +1,7 @@
-//! WebSocket endpoint: a minimal keep-alive.
+//! WebSocket endpoint: authenticates, upgrades and hands the socket to
+//! [`crate::live::socket`].
 
 use super::*;
-
-// ---------------------------------------------------------------------------
-// WebSocket: minimal keep-alive so clients don't reconnect-loop.
-// ---------------------------------------------------------------------------
 
 pub(super) async fn ws_handler(State(st): State<Shared>, req: Request) -> Response {
     let query: Vec<(String, String)> = req
@@ -17,30 +14,17 @@ pub(super) async fn ws_handler(State(st): State<Shared>, req: Request) -> Respon
         })
         .unwrap_or_default();
     let info = auth::client_auth(req.headers(), &query);
-    if info.get("token").and_then(|t| st.sessions.get(t)).is_none() {
-        return err_resp(StatusCode::UNAUTHORIZED, "Unauthorized");
-    }
+    let Some(session) = info.get("token").and_then(|t| st.sessions.get(t)) else {
+        return err_resp(StatusCode::FORBIDDEN, "Error processing request.");
+    };
     let (mut parts, _) = req.into_parts();
     use axum::extract::FromRequestParts;
     match WebSocketUpgrade::from_request_parts(&mut parts, &st).await {
-        Ok(ws) => ws.on_upgrade(ws_loop),
-        Err(e) => e.into_response(),
-    }
-}
-
-pub(super) async fn ws_loop(mut sock: WebSocket) {
-    let hello = json!({"MessageType": "ForceKeepAlive", "Data": 60}).to_string();
-    if sock.send(Message::Text(hello.into())).await.is_err() {
-        return;
-    }
-    while let Some(Ok(msg)) = sock.recv().await {
-        if let Message::Text(t) = msg {
-            if t.contains("KeepAlive") {
-                let ka = json!({"MessageType": "KeepAlive"}).to_string();
-                if sock.send(Message::Text(ka.into())).await.is_err() {
-                    break;
-                }
-            }
+        Ok(ws) => {
+            let live = st.local.live.clone();
+            let server_id = st.server_id.clone();
+            ws.on_upgrade(move |sock| crate::live::socket::run(live, server_id, session, sock))
         }
+        Err(e) => e.into_response(),
     }
 }

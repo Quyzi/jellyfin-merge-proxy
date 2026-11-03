@@ -6,6 +6,7 @@
 //! ordering), and parental ratings sort by the server's rating score. Ties
 //! break on SortName and then id, so deep paging is stable.
 
+use super::clean::clean;
 use super::query::UserFact;
 use super::snapshot::{Item, Snapshot};
 use std::cmp::Ordering;
@@ -42,7 +43,7 @@ impl SortKey {
     pub fn parse(s: &str) -> Option<SortKey> {
         use SortKey::*;
         Some(match s.trim().to_ascii_lowercase().as_str() {
-            "sortname" | "default" => SortName,
+            "sortname" => SortName,
             "name" => Name,
             "datecreated" => DateCreated,
             "premieredate" => PremiereDate,
@@ -75,6 +76,13 @@ impl SortKey {
             PlayCount | DatePlayed | IsPlayed | IsUnplayed | IsFavoriteOrLiked | SeriesDatePlayed
         )
     }
+}
+
+#[derive(Clone, Copy)]
+enum Col {
+    Key(SortKey),
+    RawName,
+    Relevance,
 }
 
 /// A sortable value; `None` = SQL NULL.
@@ -147,7 +155,7 @@ impl<'a> SortCtx<'a> {
         let series_entry = || it.series.map(|s| self.snap.primary(&self.snap.items[s]));
         match key {
             SortName => Some(V::S(e.sort_name.clone())),
-            Name => Some(V::S(e.name.clone())),
+            Name => Some(V::S(clean(&e.name))),
             DateCreated => e.created.clone().map(V::S),
             PremiereDate => e.premiere.clone().map(V::S),
             ProductionYear => e.year.map(V::I),
@@ -183,14 +191,55 @@ impl<'a> SortCtx<'a> {
         }
     }
 
-    /// Sort item indexes by `keys` (`true` = descending).
-    pub fn sort(&self, items: &mut [usize], keys: &[(SortKey, bool)]) {
+    /// Sort item indexes by `keys` (`true` = descending). With a search
+    /// term (`clean`ed), match quality sorts first, then `SortName` and the
+    /// raw name; a leading `SortName` key is always followed by the raw
+    /// name (`BaseItemRepository.ApplyOrder`).
+    pub fn sort(&self, items: &mut [usize], keys: &[(SortKey, bool)], search: Option<&str>) {
+        let mut cols: Vec<(Col, bool)> = vec![];
+        let mut all: Vec<(SortKey, bool)> = vec![];
+        if search.is_some() {
+            all.push((SortKey::SortName, false));
+            cols.push((Col::Relevance, false));
+        }
+        all.extend_from_slice(keys);
+        for (n, (k, desc)) in all.iter().enumerate() {
+            cols.push((Col::Key(*k), *desc));
+            if n == 0 && *k == SortKey::SortName {
+                cols.push((Col::RawName, *desc));
+            }
+        }
+        let term = search.unwrap_or("");
+        let prefix = format!("{term} ");
         let mut decorated: Vec<(Vec<Option<V>>, usize)> = items
             .iter()
-            .map(|i| (keys.iter().map(|(k, _)| self.value(*i, *k)).collect(), *i))
+            .map(|i| {
+                let vals = cols
+                    .iter()
+                    .map(|(c, _)| match c {
+                        Col::Key(k) => self.value(*i, *k),
+                        Col::RawName => {
+                            Some(V::S(self.snap.primary(&self.snap.items[*i]).name.clone()))
+                        }
+                        Col::Relevance => {
+                            let n = clean(&self.snap.primary(&self.snap.items[*i]).name);
+                            Some(V::I(if n == term {
+                                0
+                            } else if n.starts_with(&prefix) {
+                                1
+                            } else if n.starts_with(term) {
+                                2
+                            } else {
+                                3
+                            }))
+                        }
+                    })
+                    .collect();
+                (vals, *i)
+            })
             .collect();
         decorated.sort_by(|(va, a), (vb, b)| {
-            for (n, (_, desc)) in keys.iter().enumerate() {
+            for (n, (_, desc)) in cols.iter().enumerate() {
                 let o = cmp_opt(&va[n], &vb[n]);
                 let o = if *desc { o.reverse() } else { o };
                 if o != Ordering::Equal {
@@ -212,6 +261,7 @@ impl<'a> SortCtx<'a> {
 
 /// Parse `SortBy` / `SortOrder` like Jellyfin: one order applies to every
 /// key, otherwise orders pair up by position (missing = ascending).
+/// `Default` entries are dropped (`BaseItemRepository.ApplyOrder`).
 /// `Err(key)` for a key the index cannot sort by.
 pub fn parse_sort(by: Option<&str>, order: Option<&str>) -> Result<Vec<(SortKey, bool)>, String> {
     let orders: Vec<bool> = order
@@ -227,6 +277,9 @@ pub fn parse_sort(by: Option<&str>, order: Option<&str>) -> Result<Vec<(SortKey,
         .filter(|s| !s.trim().is_empty())
         .enumerate()
     {
+        if k.trim().eq_ignore_ascii_case("default") {
+            continue;
+        }
         let key = SortKey::parse(k).ok_or_else(|| k.trim().to_string())?;
         let desc = match orders.len() {
             0 => false,

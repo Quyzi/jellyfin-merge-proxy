@@ -79,7 +79,7 @@ pub(super) async fn debug_handler(State(st): State<Shared>, req: Request) -> Res
         },
         "caches": {
             "catalog": catalog,
-            "display_prefs_entries": st.display_prefs.lock().unwrap().len(),
+            "display_prefs_entries": st.local.prefs.len(),
             "password_hashes": st.password_cache().len(),
         },
         "sessions": st.sessions.list(),

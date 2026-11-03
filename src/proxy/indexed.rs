@@ -21,6 +21,11 @@ pub(super) fn index_outcome(endpoint: &'static str, outcome: &'static str) {
 
 /// The snapshot to answer from, if the index is warm.
 pub(super) fn warm_snapshot(st: &Shared, endpoint: &'static str) -> Option<Arc<Snapshot>> {
+    if all_down(st) {
+        // Every server is unreachable: nothing can hydrate a page. Let the
+        // fan-out path answer 503.
+        return None;
+    }
     let snap = st.index.snapshot(&st.cfg(), &st.backends()[..]);
     if snap.is_none() {
         index_outcome(endpoint, "cold");
@@ -34,7 +39,7 @@ pub(super) fn is_live(st: &Shared, s: ServerId) -> bool {
 
 /// What a `ParentId`-like value points at, or `None` if the index cannot
 /// scope a query by it.
-pub(super) fn scope_of(st: &Shared, snap: &Snapshot, raw: &str) -> Option<Scope> {
+pub(crate) fn scope_of(st: &Shared, snap: &Snapshot, raw: &str) -> Option<Scope> {
     let pid = ProxyItemId::parse(raw)?;
     match st.ids.decode(&pid) {
         Some(Target::View(v)) => {
@@ -148,6 +153,14 @@ pub async fn indexed_items(
     let _s = Stage::start("index_page");
     let page = iq.page(&all);
     let items = hydrate(st, c, &snap, page, &r.query).await;
+    if items.is_empty() && !page.is_empty() {
+        // Servers that time out without being marked down: the index chose a
+        // page and none of it could be fetched. Fail rather than show nothing.
+        return Some(Ok(err_resp(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "upstream unavailable",
+        )));
+    }
     counter!(names::MERGE_ITEMS_OUT, "endpoint" => endpoint).increment(items.len() as u64);
     Some(Ok(ok_json(dto::query_result(items, all.len(), iq.start))))
 }

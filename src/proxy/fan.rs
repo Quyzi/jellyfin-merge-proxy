@@ -27,11 +27,19 @@ pub async fn fan_list_on(
     targets: ListTargets,
     siblings: bool,
 ) -> Result<Response> {
+    if all_down(st) {
+        return Ok(err_resp(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "upstream unavailable",
+        ));
+    }
     let cfg = st.cfg();
     let start: usize = q_get(&r.query, "StartIndex")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
-    let limit: Option<usize> = q_get(&r.query, "Limit").and_then(|s| s.parse().ok());
+    let limit: Option<usize> = q_get(&r.query, "Limit")
+        .and_then(|s| s.parse().ok())
+        .or(spec.default_limit);
     let fanout = targets.len() > 1;
     let endpoint = spec.name;
     let mut queried = 0usize;
@@ -53,6 +61,9 @@ pub async fn fan_list_on(
             continue;
         };
         let mut q = q;
+        if spec.shape != Shape::SearchHints {
+            client_fields::apply(c, &spec.path, &mut q);
+        }
         if fanout && spec.dedupe_items && cfg.merge.dedupe && spec.shape != Shape::SearchHints {
             // Real servers only return ProviderIds when asked; dedupe needs them.
             ensure_field(&mut q, "ProviderIds");
@@ -75,7 +86,7 @@ pub async fn fan_list_on(
                 Err(e) => {
                     tracing::warn!(upstream = %up.name(), "skipping: {e}");
                     outcome("skipped");
-                    return Err(());
+                    return Err(true);
                 }
             };
             let mut q = q;
@@ -88,12 +99,12 @@ pub async fn fan_list_on(
                 Ok((s, _)) => {
                     tracing::warn!(upstream = %up.name(), endpoint, "list: HTTP {s}");
                     outcome("http_error");
-                    Err(())
+                    Err(false)
                 }
                 Err(e) => {
                     tracing::warn!(upstream = %up.name(), endpoint, "list: {e}");
                     outcome(fan_outcome(&e));
-                    Err(())
+                    Err(true)
                 }
             }
         });
@@ -104,8 +115,21 @@ pub async fn fan_list_on(
     let raw = join_all(futs).await;
     histogram!(names::FANOUT_SLOWEST, "endpoint" => endpoint).record(wait.elapsed().as_secs_f64());
     drop(fan_stage);
-    let results: Vec<(Arc<dyn MediaBackend>, SessionInfo, Value)> =
-        raw.into_iter().filter_map(|r| r.ok()).collect();
+    let mut results: Vec<(Arc<dyn MediaBackend>, SessionInfo, Value)> = vec![];
+    let mut http_failed = false;
+    for r in raw {
+        match r {
+            Ok(x) => results.push(x),
+            Err(transport) => http_failed |= !transport,
+        }
+    }
+    if queried > 0 && results.is_empty() && !http_failed {
+        // Every upstream was unreachable: an outage, not an empty library.
+        return Ok(err_resp(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "upstream unavailable",
+        ));
+    }
     if !results.is_empty() && results.len() < queried {
         counter!(names::FANOUT_PARTIAL, "endpoint" => endpoint).increment(1);
     }
@@ -178,6 +202,11 @@ pub async fn fan_list_on(
         all = a;
         removed += n;
     }
+    if let (true, Some(key)) = (fanout, spec.dedupe_key) {
+        let (a, n) = dedupe_by_field(all, key, true, "name");
+        all = a;
+        removed += n;
+    }
     if fanout && spec.dedupe_by_name {
         let _s = Stage::start("dedupe");
         let d = MeteredDeduplicator::new(merge::NameDeduplicator, &server_names);
@@ -213,26 +242,42 @@ pub async fn fan_list_on(
 /// (first in server order on ties). Returns the kept items and how many
 /// were dropped.
 pub(super) fn dedupe_by_id(all: Vec<Ranked>) -> (Vec<Ranked>, usize) {
+    dedupe_by_field(all, "Id", false, "canonical")
+}
+
+/// [`dedupe_by_id`] over any string field of the item, optionally compared
+/// case-insensitively. `label` is the `jmp_dedupe_dropped_total` key.
+pub(super) fn dedupe_by_field(
+    all: Vec<Ranked>,
+    field: &str,
+    lower: bool,
+    label: &'static str,
+) -> (Vec<Ranked>, usize) {
     let mut best: std::collections::HashMap<String, usize> = Default::default();
     let mut keep = vec![true; all.len()];
     for (i, r) in all.iter().enumerate() {
-        let Some(id) = r.item.get("Id").and_then(|v| v.as_str()) else {
+        let Some(id) = r.item.get(field).and_then(|v| v.as_str()) else {
             continue;
         };
-        match best.get(id).copied() {
+        let id: std::borrow::Cow<str> = if lower {
+            id.to_lowercase().into()
+        } else {
+            id.into()
+        };
+        match best.get(id.as_ref()).copied() {
             Some(j) if r.priority < all[j].priority => {
                 keep[j] = false;
-                best.insert(id.to_string(), i);
+                best.insert(id.into_owned(), i);
             }
             Some(_) => keep[i] = false,
             None => {
-                best.insert(id.to_string(), i);
+                best.insert(id.into_owned(), i);
             }
         }
     }
     let removed = keep.iter().filter(|k| !**k).count();
     if removed > 0 {
-        counter!(names::DEDUPE_DROPPED, "key" => "canonical").increment(removed as u64);
+        counter!(names::DEDUPE_DROPPED, "key" => label).increment(removed as u64);
     }
     let out = all
         .into_iter()
@@ -245,33 +290,62 @@ pub(super) fn dedupe_by_id(all: Vec<Ranked>) -> (Vec<Ranked>, usize) {
 /// Fan out a request returning an object and merge the objects:
 /// arrays are unioned, numbers summed (`sum`) or the first value kept.
 pub async fn fan_merge_objects(st: &Shared, r: &Req, c: &Client, sum: bool) -> Result<Response> {
-    Ok(ok_json(fan_merge_value(st, r, c, sum).await))
+    Ok(match fan_merge_value(st, r, c, sum).await {
+        Some(v) => ok_json(v),
+        None => err_resp(StatusCode::SERVICE_UNAVAILABLE, "upstream unavailable"),
+    })
 }
 
-/// The merged object of [`fan_merge_objects`].
-pub async fn fan_merge_value(st: &Shared, r: &Req, c: &Client, sum: bool) -> Value {
+/// The merged object of [`fan_merge_objects`]. `None` when the servers
+/// that were asked could not be reached at all (an outage; an empty merge
+/// would look like an empty library).
+pub async fn fan_merge_value(st: &Shared, r: &Req, c: &Client, sum: bool) -> Option<Value> {
+    if all_down(st) {
+        return None;
+    }
     let (targets, _) = list_targets(st, &r.query).await;
     let segs: Vec<String> = r.segs.clone();
-    let futs = targets.into_iter().filter_map(|(u, parent)| {
-        let q = query_for(st, &r.query, u, parent.as_ref().map(|p| p.as_str()), None)?;
-        let up = st.backend(u)?.clone();
-        let segs = segs.clone();
-        let user = c.user_id.as_str();
-        Some(async move {
-            let uc = up.login_as(Some(user)).await.ok()?;
-            let mut q = q;
-            let segs = crate::paths::adapt(segs, &mut q, uc.modern, uc.user_id.as_deref());
-            match up
-                .get_json_as(Some(user), &path_with_query(&segs, &q))
-                .await
-            {
-                Ok((s, v)) if s.is_success() => Some((up, uc, v)),
-                _ => None,
-            }
+    let futs: Vec<_> = targets
+        .into_iter()
+        .filter_map(|(u, parent)| {
+            let q = query_for(st, &r.query, u, parent.as_ref().map(|p| p.as_str()), None)?;
+            let up = st.backend(u)?.clone();
+            let segs = segs.clone();
+            let user = c.user_id.as_str();
+            Some(async move {
+                let Ok(uc) = up.login_as(Some(user)).await else {
+                    return Err(true);
+                };
+                let mut q = q;
+                let segs = crate::paths::adapt(segs, &mut q, uc.modern, uc.user_id.as_deref());
+                match up
+                    .get_json_as(Some(user), &path_with_query(&segs, &q))
+                    .await
+                {
+                    Ok((s, v)) if s.is_success() => Ok((up, uc, v)),
+                    Ok(_) => Err(false),
+                    Err(_) => Err(true),
+                }
+            })
         })
-    });
+        .collect();
+    let queried = futs.len();
+    let mut results = vec![];
+    let mut http_failed = false;
+    for r in join_all(futs).await {
+        match r {
+            Ok(x) => results.push(x),
+            Err(transport) => http_failed |= !transport,
+        }
+    }
+    if queried > 0 && results.is_empty() && !http_failed {
+        return None;
+    }
+    if !results.is_empty() && results.len() < queried {
+        counter!(names::FANOUT_PARTIAL, "endpoint" => "merge").increment(1);
+    }
     let mut acc = serde_json::Map::new();
-    for (up, uc, mut v) in join_all(futs).await.into_iter().flatten() {
+    for (up, uc, mut v) in results {
         st.rewriters
             .rewrite_json(&mut v, &out_ctx(st, up.as_ref(), &uc, c));
         let Value::Object(o) = v else { continue };
@@ -298,5 +372,5 @@ pub async fn fan_merge_value(st: &Shared, r: &Req, c: &Client, sum: bool) -> Val
             }
         }
     }
-    Value::Object(acc)
+    Some(Value::Object(acc))
 }

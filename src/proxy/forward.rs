@@ -15,6 +15,7 @@ pub async fn playstate(st: &Shared, r: Req, c: &Client) -> Result<Response> {
         .or_else(|| q_get(&r.query, "ItemId").map(String::from));
     if let Some(id) = item {
         record_playback(st, &r, c, &id, &body);
+        crate::live::control::record_session(st, &r, c, &body);
         if let Some(Target::Item { upstream, .. }) = resolve_or_refresh(st, &id).await {
             return forward(st, upstream, r, c, None).await;
         }
@@ -39,8 +40,12 @@ fn record_playback(st: &Shared, r: &Req, c: &Client, id: &str, body: &Value) {
         .get("PositionTicks")
         .and_then(|v| v.as_i64())
         .or_else(|| q_get(&r.query, "PositionTicks").and_then(|v| v.parse().ok()));
+    let failed = body
+        .get("Failed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     st.userdata
-        .playback(&c.user_id, &pid, ev, pos, &crate::dto::now_iso());
+        .playback(&c.user_id, &pid, ev, pos, failed, &crate::dto::now_iso());
 }
 
 /// Find the owning upstream of a request by the first proxy id in its path,
@@ -211,6 +216,9 @@ pub async fn forward(
         .filter(|(k, _)| !is_token_key(k))
         .map(|(k, v)| (k.clone(), ic.map_list(v)))
         .collect();
+    if r.method == Method::GET {
+        client_fields::apply(c, &segs, &mut q);
+    }
     let trailing_slash = segs_override_none && r.raw_path.len() > 1 && r.raw_path.ends_with('/');
     let segs = crate::paths::adapt(segs, &mut q, uc.modern, uc.user_id.as_deref());
     let mut headers = HeaderMap::new();

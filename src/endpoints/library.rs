@@ -4,8 +4,9 @@ use super::{done, Flow, HandlerResult, Route};
 use crate::dto;
 use crate::handler;
 use crate::ids::Target;
-use crate::proxy::{self, ok_json, q_get, Client, ListSpec, Req};
+use crate::proxy::{self, err_resp, ok_json, q_get, Client, ListSpec, Req};
 use crate::Shared;
+use axum::http::StatusCode;
 
 pub fn routes() -> Vec<Route> {
     vec![
@@ -94,6 +95,9 @@ async fn items(st: &Shared, r: Req, c: &Client) -> HandlerResult {
         let n = v.len();
         return done(ok_json(dto::query_result(v, n, 0)));
     }
+    if let Some(res) = proxy::items_hook(st, &r, c).await {
+        return done(res?);
+    }
     if let Some(res) = proxy::indexed_items(st, &r, c, "items", &r.query).await {
         return done(res?);
     }
@@ -118,7 +122,23 @@ async fn nextup(st: &Shared, r: Req, c: &Client) -> HandlerResult {
     done(proxy::fan_list(st, &r, c, &proxy::NEXTUP).await?)
 }
 
-async fn seasons(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+/// `DisplayMissingEpisodes` off: virtual items are hidden whatever the client
+/// asked (`Series.cs` overrides `IsMissing`; `TvShowsController` removes
+/// missing episodes before applying the client's filter). `false` = the
+/// client asked for missing episodes only, which is then empty.
+fn hide_missing(st: &Shared, r: &mut Req, c: &Client, episodes: bool) -> bool {
+    if st.local.settings.display_missing_episodes(&c.user_id) {
+        return true;
+    }
+    let asked = q_get(&r.query, "IsMissing").is_some_and(|v| v.eq_ignore_ascii_case("true"));
+    r.query
+        .retain(|(k, _)| !k.eq_ignore_ascii_case("IsMissing"));
+    r.query.push(("IsMissing".into(), "false".into()));
+    !(episodes && asked)
+}
+
+async fn seasons(st: &Shared, mut r: Req, c: &Client) -> HandlerResult {
+    hide_missing(st, &mut r, c, false);
     if let Some(res) = proxy::indexed_show_children(st, &r, c, false).await {
         return done(res?);
     }
@@ -128,7 +148,13 @@ async fn seasons(st: &Shared, r: Req, c: &Client) -> HandlerResult {
     }
 }
 
-async fn episodes(st: &Shared, r: Req, c: &Client) -> HandlerResult {
+async fn episodes(st: &Shared, mut r: Req, c: &Client) -> HandlerResult {
+    if !hide_missing(st, &mut r, c, true) {
+        let start = q_get(&r.query, "StartIndex")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        return done(ok_json(dto::query_result(vec![], 0, start)));
+    }
     if let Some(res) = proxy::indexed_show_children(st, &r, c, true).await {
         return done(res?);
     }
@@ -165,7 +191,9 @@ async fn filters(st: &Shared, r: Req, c: &Client) -> HandlerResult {
             // Values the index does not keep (audio/subtitle languages,
             // newer servers' fields) come from the live servers.
             let live = proxy::fan_merge_value(st, &r, c, false).await;
-            if let (serde_json::Value::Object(m), serde_json::Value::Object(l)) = (&mut v, live) {
+            if let (serde_json::Value::Object(m), Some(serde_json::Value::Object(l))) =
+                (&mut v, live)
+            {
                 for (k, mut val) in l {
                     if let serde_json::Value::Array(a) = &mut val {
                         a.sort_by(|x, y| x["Name"].as_str().cmp(&y["Name"].as_str()));
@@ -180,7 +208,12 @@ async fn filters(st: &Shared, r: Req, c: &Client) -> HandlerResult {
 }
 
 async fn counts(st: &Shared, r: Req, c: &Client) -> HandlerResult {
-    let mut v = proxy::fan_merge_value(st, &r, c, true).await;
+    let Some(mut v) = proxy::fan_merge_value(st, &r, c, true).await else {
+        return done(err_resp(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "upstream unavailable",
+        ));
+    };
     proxy::indexed_counts(st, &r, c, &mut v);
     done(ok_json(v))
 }

@@ -5,9 +5,13 @@
 //! know, so the caller falls back to live fan-out instead of answering a
 //! query differently from Jellyfin.
 
+use super::clean::clean;
 use super::snapshot::{Item, NameKind, Snapshot};
 use super::sort::{parse_sort, SortCtx, SortKey};
 use crate::types::{normalize_hex_id, ProxyItemId, ServerId};
+
+#[path = "query_match.rs"]
+mod query_match;
 
 /// Per-user state of one item (from the proxy's user data store).
 pub use crate::userdata::ItemState as UserFact;
@@ -40,7 +44,17 @@ pub struct IndexQuery {
     pub name_starts_with: Option<String>,
     pub name_starts_with_or_greater: Option<String>,
     pub name_less_than: Option<String>,
+    /// `SearchTerm` after [`clean`], and its plain lower-case form (matched
+    /// against `OriginalTitle`).
     pub search: Option<String>,
+    pub search_original: Option<String>,
+    pub virtual_item: Option<bool>,
+    pub missing: Option<bool>,
+    pub unaired: Option<bool>,
+    pub exclude_tags: Vec<String>,
+    /// Program flags that can never hold for library items
+    /// (`IsAiring`, `IsSeries=true`, `IsMovie=false`, ...).
+    pub impossible: bool,
     pub ids: Option<Vec<usize>>,
     pub is_folder: Option<bool>,
     pub min_community: Option<f64>,
@@ -76,8 +90,6 @@ const PASSTHROUGH: &[&str] = &[
     "sortorder",
     "recursive",
     "parentid",
-    "ismissing",
-    "excludelocationtypes",
     "isvirtualunaired",
     "collapseboxsetitems",
     "hasquerylimit",
@@ -125,6 +137,9 @@ impl IndexQuery {
                 })
                 .collect()
         };
+        let (mut exclude_loc, mut loc) = (vec![], vec![]);
+        let (mut movie, mut series, mut airing) = (None, None, None);
+        let (mut sports, mut news, mut kids) = (None, None, None);
         for (k, v) in q {
             let kl = k.to_ascii_lowercase();
             if v.is_empty() || PASSTHROUGH.contains(&kl.as_str()) {
@@ -149,7 +164,20 @@ impl IndexQuery {
                     out.name_starts_with_or_greater = Some(v.to_lowercase())
                 }
                 "namelessthan" => out.name_less_than = Some(v.to_lowercase()),
-                "searchterm" => out.search = Some(super::entry::normalize_name(v)),
+                "searchterm" => {
+                    out.search = Some(clean(v));
+                    out.search_original = Some(v.to_lowercase());
+                }
+                "ismissing" => out.missing = truthy(v),
+                "isunaired" => out.unaired = truthy(v),
+                "excludelocationtypes" => exclude_loc = list(v, ','),
+                "locationtypes" => loc = list(v, ','),
+                "ismovie" => movie = truthy(v),
+                "isseries" => series = truthy(v),
+                "isairing" => airing = truthy(v),
+                "issports" => sports = truthy(v),
+                "isnews" => news = truthy(v),
+                "iskids" => kids = truthy(v),
                 "ids" => {
                     out.ids = Some(
                         list(v, ',')
@@ -203,6 +231,33 @@ impl IndexQuery {
             }
         }
         out.sort = parse_sort(get("SortBy"), get("SortOrder")).map_err(|k| format!("sort:{k}"))?;
+        let movie_ok = out.include_types.is_empty()
+            || out
+                .include_types
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case("Movie") || t.eq_ignore_ascii_case("Trailer"));
+        if movie.is_some_and(|m| !(m && movie_ok)) || series == Some(true) || airing.is_some() {
+            out.impossible = true;
+        }
+        for (flag, tag) in [(sports, "sports"), (news, "news"), (kids, "kids")] {
+            match flag {
+                Some(true) => out.tags.push(tag.into()),
+                Some(false) => out.exclude_tags.push(tag.into()),
+                None => {}
+            }
+        }
+        for t in out.tags.iter_mut().chain(out.exclude_tags.iter_mut()) {
+            *t = clean(t);
+        }
+        if exclude_loc
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case("Virtual"))
+        {
+            out.virtual_item = Some(false);
+        }
+        if (1..4).contains(&loc.len()) {
+            out.virtual_item = Some(loc.iter().any(|t| t.eq_ignore_ascii_case("Virtual")));
+        }
         if !with_user && out.sort.iter().any(|(k, _)| k.needs_user()) {
             return Err("sort:user".into());
         }
@@ -212,135 +267,6 @@ impl IndexQuery {
         out.start = get("StartIndex").and_then(|s| s.parse().ok()).unwrap_or(0);
         out.limit = get("Limit").and_then(|s| s.parse().ok());
         Ok(out)
-    }
-
-    fn type_ok(&self, kind: &str, list: &[String]) -> bool {
-        list.iter().any(|t| t.eq_ignore_ascii_case(kind))
-    }
-
-    fn matches(
-        &self,
-        snap: &Snapshot,
-        idx: usize,
-        user: &dyn Fn(&Item) -> Option<UserFact>,
-    ) -> bool {
-        let it = &snap.items[idx];
-        let e = snap.primary(it);
-        match &self.parent {
-            None => {}
-            Some(Scope::Nothing) => return false,
-            Some(Scope::Libraries(libs)) => {
-                if !it.libraries.iter().any(|l| libs.contains(l)) {
-                    return false;
-                }
-            }
-            Some(Scope::Item(p)) => {
-                let child = it.season == Some(*p)
-                    || (it.series == Some(*p) && (self.recursive || e.is("Season")));
-                if !child {
-                    return false;
-                }
-            }
-        }
-        if !self.include_types.is_empty() && !self.type_ok(&e.kind, &self.include_types) {
-            return false;
-        }
-        if self.type_ok(&e.kind, &self.exclude_types) {
-            return false;
-        }
-        if !self.media_types.is_empty()
-            && !e
-                .media_type
-                .as_deref()
-                .is_some_and(|m| self.type_ok(m, &self.media_types))
-        {
-            return false;
-        }
-        let any = |want: &Option<Vec<usize>>, have: &[usize]| {
-            want.as_ref()
-                .is_none_or(|w| w.iter().any(|g| have.contains(g)))
-        };
-        if !any(&self.genres, &it.genres) || !any(&self.studios, &it.studios) {
-            return false;
-        }
-        if let Some(w) = &self.persons {
-            let hit = it.people.iter().any(|(n, role)| {
-                w.contains(n)
-                    && (self.person_types.is_empty() || self.type_ok(role, &self.person_types))
-            });
-            if !hit {
-                return false;
-            }
-        }
-        if !self.years.is_empty() && !e.year.is_some_and(|y| self.years.contains(&y)) {
-            return false;
-        }
-        if !self.official.is_empty()
-            && !e
-                .official
-                .as_deref()
-                .is_some_and(|r| self.type_ok(r, &self.official))
-        {
-            return false;
-        }
-        if !self.tags.is_empty() && !e.tags.iter().any(|t| self.type_ok(t, &self.tags)) {
-            return false;
-        }
-        let sn = e.sort_name.as_str();
-        if let Some(p) = &self.name_starts_with {
-            if !sn.starts_with(p.as_str()) && !e.name.to_lowercase().starts_with(p.as_str()) {
-                return false;
-            }
-        }
-        if self
-            .name_starts_with_or_greater
-            .as_ref()
-            .is_some_and(|p| sn < p.as_str())
-            || self
-                .name_less_than
-                .as_ref()
-                .is_some_and(|p| sn >= p.as_str())
-        {
-            return false;
-        }
-        if let Some(s) = &self.search {
-            if !super::entry::normalize_name(&e.name).contains(s.as_str()) {
-                return false;
-            }
-        }
-        if self.ids.as_ref().is_some_and(|ids| !ids.contains(&idx))
-            || self.is_folder.is_some_and(|f| f != e.is_folder)
-            || self
-                .min_community
-                .is_some_and(|m| e.community.is_none_or(|c| c < m))
-            || self
-                .min_critic
-                .is_some_and(|m| e.critic.is_none_or(|c| c < m))
-            || self.series.is_some_and(|s| it.series != Some(s))
-            || self.season.is_some_and(|s| it.season != Some(s))
-            || self
-                .season_number
-                .is_some_and(|n| e.parent_index != Some(n))
-        {
-            return false;
-        }
-        let needs_user = self.played.is_some()
-            || self.favorite.is_some()
-            || self.resumable
-            || self.likes.is_some()
-            || self.favorite_or_likes;
-        if needs_user {
-            let u = user(it).unwrap_or_default();
-            if self.played.is_some_and(|p| p != u.played)
-                || self.favorite.is_some_and(|f| f != u.favorite)
-                || (self.resumable && u.position_ticks <= 0)
-                || self.likes.is_some_and(|l| u.likes != Some(l))
-                || (self.favorite_or_likes && !(u.favorite || u.likes == Some(true)))
-            {
-                return false;
-            }
-        }
-        true
     }
 
     /// Matching item indexes (sorted, all pages) among items with a copy
@@ -361,7 +287,7 @@ impl IndexQuery {
             .filter(|i| self.matches(snap, *i, user))
             .collect();
         let ctx = SortCtx::new(snap, user, &self.sort, &hits);
-        ctx.sort(&mut hits, &self.sort);
+        ctx.sort(&mut hits, &self.sort, self.search.as_deref());
         hits
     }
 

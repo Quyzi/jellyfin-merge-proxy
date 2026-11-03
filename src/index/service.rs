@@ -24,6 +24,7 @@ use metrics::{counter, gauge, histogram};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::broadcast;
 
 /// What a snapshot was built from; a change triggers a rebuild.
 #[derive(Debug, Clone, PartialEq)]
@@ -44,6 +45,8 @@ pub struct IndexService {
     crawled: Mutex<BTreeMap<String, Arc<StoredServerIndex>>>,
     persisted: Mutex<HashMap<ProxyItemId, ProxyItemId>>,
     snap: ArcSwapOption<Snapshot>,
+    /// `(previous, new)` after every rebuild.
+    published: broadcast::Sender<(Option<Arc<Snapshot>>, Arc<Snapshot>)>,
     built: Mutex<Option<BuildKey>>,
     refreshing: tokio::sync::Mutex<()>,
     wake: tokio::sync::Notify,
@@ -94,6 +97,7 @@ impl IndexService {
             crawled: Mutex::new(crawled),
             persisted: Mutex::new(persisted),
             snap: ArcSwapOption::empty(),
+            published: broadcast::channel(4).0,
             built: Mutex::new(None),
             refreshing: tokio::sync::Mutex::new(()),
             wake: tokio::sync::Notify::new(),
@@ -124,6 +128,11 @@ impl IndexService {
     /// need every server covered).
     pub fn latest(&self) -> Option<Arc<Snapshot>> {
         self.snap.load_full()
+    }
+
+    /// Every rebuild: the snapshot it replaced (if any) and the new one.
+    pub fn subscribe(&self) -> broadcast::Receiver<(Option<Arc<Snapshot>>, Arc<Snapshot>)> {
+        self.published.subscribe()
     }
 
     pub fn group(&self, id: &ProxyItemId) -> Option<Arc<super::groups::Group>> {
@@ -224,7 +233,9 @@ impl IndexService {
             "catalog index rebuilt"
         );
         self.groups.publish(snap.groups.clone());
-        self.snap.store(Some(Arc::new(snap)));
+        let new = Arc::new(snap);
+        let old = self.snap.swap(Some(new.clone()));
+        let _ = self.published.send((old, new));
         *self.built.lock().unwrap() = Some(key);
     }
 

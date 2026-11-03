@@ -10,6 +10,7 @@
 //! live fan-out.
 
 pub mod canonical;
+pub mod clean;
 pub mod crawl;
 pub mod entry;
 pub mod grouping;

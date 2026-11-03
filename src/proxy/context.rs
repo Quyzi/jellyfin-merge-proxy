@@ -6,7 +6,7 @@ use super::*;
 // Rewriting contexts
 // ---------------------------------------------------------------------------
 
-pub(super) fn out_ctx<'a>(
+pub(crate) fn out_ctx<'a>(
     st: &'a Shared,
     up: &'a dyn MediaBackend,
     uc: &'a SessionInfo,
@@ -25,7 +25,7 @@ pub(super) fn out_ctx<'a>(
     }
 }
 
-pub(super) fn in_ctx<'a>(
+pub(crate) fn in_ctx<'a>(
     st: &'a Shared,
     up: &'a dyn MediaBackend,
     uc: &'a SessionInfo,
@@ -39,7 +39,7 @@ pub(super) fn in_ctx<'a>(
     }
 }
 
-pub(super) fn path_with_query(segs: &[String], q: &[(String, String)]) -> String {
+pub(crate) fn path_with_query(segs: &[String], q: &[(String, String)]) -> String {
     path_with_query_slash(segs, q, false)
 }
 

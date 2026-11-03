@@ -151,6 +151,46 @@ fn replace_keep_decor(val: &mut Value, new: String) {
     *val.decor_mut() = decor;
 }
 
+/// Replace one proxy user's `password` with `phc`, keeping formatting.
+/// The user is matched case-insensitively on `name`/`username` in the
+/// `user`/`users` array of tables. `Ok(false)` means no such user.
+pub fn set_user_password(path: &Path, user: &str, phc: &str) -> Result<bool, ConfigError> {
+    let text = fs::read_to_string(path).map_err(|e| ConfigError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    let mut doc: DocumentMut = text
+        .parse()
+        .map_err(|e| ConfigError::Invalid(format!("failed to parse TOML for rewriting: {e}")))?;
+    let mut found = false;
+    for key in ["user", "users"] {
+        let Some(users) = doc.get_mut(key).and_then(|v| v.as_array_of_tables_mut()) else {
+            continue;
+        };
+        for t in users.iter_mut() {
+            let hit = ["name", "username"].iter().any(|k| {
+                t.get(k)
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|n| n.eq_ignore_ascii_case(user))
+            });
+            if !hit {
+                continue;
+            }
+            match t.get_mut("password").and_then(|i| i.as_value_mut()) {
+                Some(v) => replace_keep_decor(v, phc.to_string()),
+                None => {
+                    t.insert("password", toml_edit::value(phc));
+                }
+            }
+            found = true;
+        }
+    }
+    if found {
+        write_atomic(path, doc.to_string().as_bytes())?;
+    }
+    Ok(found)
+}
+
 /// Hash a user password if it's plaintext. Returns `Some(hash)` if modified.
 fn rewrite_user_password(
     item: &Item,

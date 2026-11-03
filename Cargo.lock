@@ -1146,9 +1146,11 @@ dependencies = [
  "futures-util",
  "hex",
  "libc",
+ "md-5",
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-process",
+ "percent-encoding",
  "rand 0.8.8",
  "rcgen",
  "reqwest",
@@ -1162,11 +1164,13 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-tungstenite",
  "toml",
  "toml_edit",
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
+ "unicode-normalization",
  "url",
  "x509-parser",
  "zeroize",
@@ -1339,6 +1343,16 @@ name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
+
+[[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
+]
 
 [[package]]
 name = "memchr"
@@ -2786,6 +2800,15 @@ name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75cd3fb03d5288b3ba9a1ee103ac7e9cbb59f0b03d64f8ddfcc04dd42758a85d"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "universal-hash"

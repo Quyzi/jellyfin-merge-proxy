@@ -57,15 +57,54 @@ async fn reply(st: &Shared, r: &Req, c: &Client, id: &ProxyItemId) -> HandlerRes
     done(ok_json(v))
 }
 
+/// `DatePlayed` as Jellyfin's `LegacyDateTimeModelBinder` + `DateTime.Parse`
+/// read it, normalised to the DTO timestamp format (UTC).
+fn parse_date_played(v: &str) -> Option<String> {
+    use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+    let utc = |n: NaiveDateTime| n.and_utc();
+    let t: DateTime<Utc> = NaiveDateTime::parse_from_str(v, "%Y%m%d%H%M%S")
+        .map(utc)
+        .ok()
+        .or_else(|| {
+            DateTime::parse_from_rfc3339(v)
+                .ok()
+                .map(|d| d.with_timezone(&Utc))
+        })
+        .or_else(|| {
+            ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"]
+                .iter()
+                .find_map(|f| NaiveDateTime::parse_from_str(v, f).ok())
+                .map(utc)
+        })
+        .or_else(|| {
+            NaiveDate::parse_from_str(v, "%Y-%m-%d")
+                .ok()
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .map(utc)
+        })?;
+    Some(t.format("%Y-%m-%dT%H:%M:%S%.6f0Z").to_string())
+}
+
 async fn played(st: &Shared, r: Req, c: &Client) -> HandlerResult {
     let Some(id) = target(st, &r, c) else {
         return Ok(Flow::Next(r));
     };
     let on = r.method == Method::POST;
-    let now = q_get(&r.query, "DatePlayed")
-        .map(String::from)
-        .unwrap_or_else(crate::dto::now_iso);
-    st.userdata.set_played(&c.user_id, &id, on, &now);
+    let date = match q_get(&r.query, "DatePlayed") {
+        Some(v) => match parse_date_played(v) {
+            Some(d) => Some(d),
+            None => {
+                return done(proxy::err_resp(
+                    StatusCode::BAD_REQUEST,
+                    "Error processing request.",
+                ))
+            }
+        },
+        None => None,
+    };
+    let now = crate::dto::now_iso();
+    st.userdata
+        .set_played(&c.user_id, &id, on, date.as_deref().filter(|_| on), &now);
     reply(st, &r, c, &id).await
 }
 

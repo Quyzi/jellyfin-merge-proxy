@@ -2,26 +2,41 @@
 
 use super::{done, HandlerResult, Route};
 use crate::handler;
-use crate::proxy::{self, ok_json, Client, Req};
+use crate::proxy::{self, err_resp, Client, Req};
 use crate::Shared;
-use serde_json::json;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 
 pub fn routes() -> Vec<Route> {
     vec![
-        Route::auth("syncplay", handler!(empty_list)).at("syncplay/**"),
-        Route::auth("admin-lists", handler!(empty_list))
-            .at("plugins")
-            .at("packages")
-            .at("scheduledtasks")
+        // `[AllowAnonymous]` in PluginsController; there are no plugins.
+        Route::public("plugin-image", handler!(not_found))
+            .at("plugins/*/*/image")
             .get(),
+        // SyncPlay needs `SyncPlayAccess`, which no proxy user has; the
+        // admin areas need elevation.
+        Route::auth("forbidden", handler!(forbidden))
+            .at("syncplay/**")
+            .at("plugins")
+            .at("plugins/**")
+            .at("packages")
+            .at("packages/**")
+            .at("repositories")
+            .at("repositories/**")
+            .at("scheduledtasks")
+            .at("scheduledtasks/**"),
         Route::auth("primary-passthrough", handler!(primary))
             .at("playback/bitratetest")
             .at("localization/**"),
     ]
 }
 
-async fn empty_list(_st: &Shared, _r: Req, _c: &Client) -> HandlerResult {
-    done(ok_json(json!([])))
+async fn not_found(_st: &Shared, _r: Req, _c: &Client) -> HandlerResult {
+    done(err_resp(StatusCode::NOT_FOUND, "Not found"))
+}
+
+async fn forbidden(_st: &Shared, _r: Req, _c: &Client) -> HandlerResult {
+    done(StatusCode::FORBIDDEN.into_response())
 }
 
 async fn primary(st: &Shared, r: Req, c: &Client) -> HandlerResult {

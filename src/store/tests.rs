@@ -68,6 +68,7 @@ pub(crate) fn conformance(s: &dyn Store) {
     assert_eq!(s.load_sessions().unwrap().len(), 2);
 
     user_data(s);
+    local(s);
 }
 
 fn user_data(s: &dyn Store) {
@@ -91,6 +92,46 @@ fn user_data(s: &dyn Store) {
     s.mark_seeded("a", "srv").unwrap();
     s.mark_seeded("a", "srv").unwrap();
     assert_eq!(s.load_seeded().unwrap(), vec![("a".into(), "srv".into())]);
+}
+
+fn local(s: &dyn Store) {
+    use serde_json::json;
+    assert!(s.load_settings().unwrap().is_empty());
+    s.put_settings("u", &json!({"a": 1})).unwrap();
+    s.put_settings("u", &json!({"a": 2})).unwrap();
+    assert_eq!(
+        s.load_settings().unwrap(),
+        vec![("u".into(), json!({"a": 2}))]
+    );
+
+    s.put_display_prefs("u", "p", "emby", &json!({"x": 1}))
+        .unwrap();
+    s.put_display_prefs("u", "p", "emby", &json!({"x": 2}))
+        .unwrap();
+    s.put_display_prefs("u", "p", "other", &json!({"x": 3}))
+        .unwrap();
+    let mut got = s.load_display_prefs().unwrap();
+    got.sort_by(|a, b| a.2.cmp(&b.2));
+    assert_eq!(
+        got,
+        vec![
+            ("u".into(), "p".into(), "emby".into(), json!({"x": 2})),
+            ("u".into(), "p".into(), "other".into(), json!({"x": 3})),
+        ],
+        "client is part of the key"
+    );
+
+    assert!(s.load_playlists().unwrap().is_empty());
+    s.put_playlist("p1", "u", &json!({"id": "p1", "n": 1}))
+        .unwrap();
+    s.put_playlist("p1", "u", &json!({"id": "p1", "n": 2}))
+        .unwrap();
+    s.put_playlist("p2", "u", &json!({"id": "p2"})).unwrap();
+    s.delete_playlist("p2").unwrap();
+    assert_eq!(
+        s.load_playlists().unwrap(),
+        vec![json!({"id": "p1", "n": 2})]
+    );
 }
 
 #[test]

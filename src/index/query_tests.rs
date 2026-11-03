@@ -248,3 +248,141 @@ fn refuses_what_it_cannot_answer() {
         );
     }
 }
+
+/// One server, no cross-server grouping: a snapshot of exactly `entries`.
+fn snap_of(entries: Vec<Entry>) -> Snapshot {
+    let servers = vec![Arc::new(ServerEntries {
+        server: ServerId(0),
+        entries,
+        ratings: HashMap::new(),
+    })];
+    let encode = |_: ServerId, u: &UpstreamItemId| ProxyItemId::parse(u.as_str()).unwrap();
+    let policy = ProviderGrouping {
+        enabled: false,
+        types: vec![],
+    };
+    let rank = |_: ServerId| ServerRank {
+        priority: 0,
+        order: 0,
+    };
+    Snapshot::build(
+        &servers,
+        &policy,
+        &PriorityRanker,
+        &rank,
+        &encode,
+        &HashMap::new(),
+    )
+    .0
+}
+
+fn titled(n: u32, name: &str, sort: &str, original: Option<&str>) -> Entry {
+    let mut e = movie(n, name, &n.to_string(), ("g", 500));
+    e.sort_name = sort.into();
+    e.original_title = original.map(String::from);
+    e
+}
+
+const MOVIES: [(&str, &str); 3] = [
+    ("ParentId", "x"),
+    ("Recursive", "true"),
+    ("IncludeItemTypes", "Movie"),
+];
+
+fn with(extra: &[(&'static str, &'static str)]) -> Vec<(&'static str, &'static str)> {
+    let mut v = MOVIES.to_vec();
+    v.extend_from_slice(extra);
+    v
+}
+
+/// A virtual (missing) episode leaked into lists, or a folderless season was
+/// hidden together with it.
+#[test]
+fn virtual_items_follow_missing_and_location_type_filters() {
+    let mut real = ep(13, 10, 11, 1, 2);
+    real.location_type = Some("FileSystem".into());
+    let mut missing = ep(12, 10, 11, 1, 1);
+    missing.location_type = Some("Virtual".into());
+    let mut season = folder(11, "Season", Some(10), Some(1));
+    season.location_type = Some("Virtual".into());
+    let s = snap_of(vec![
+        folder(10, "Series", None, None),
+        season,
+        real,
+        missing,
+    ]);
+    let eps = |extra: &[(&'static str, &'static str)]| {
+        let mut v = vec![
+            ("ParentId", "x"),
+            ("Recursive", "true"),
+            ("IncludeItemTypes", "Episode"),
+        ];
+        v.extend_from_slice(extra);
+        names(&s, &v).0
+    };
+    assert_eq!(eps(&[("IsMissing", "false")]), ["S1E2"]);
+    assert_eq!(eps(&[("ExcludeLocationTypes", "Virtual")]), ["S1E2"]);
+    assert_eq!(eps(&[("LocationTypes", "Virtual")]), ["S1E1"]);
+    assert_eq!(eps(&[("IsMissing", "true")]), ["S1E1"]);
+    let seasons = [
+        ("ParentId", "x"),
+        ("Recursive", "true"),
+        ("IncludeItemTypes", "Season"),
+        ("IsMissing", "false"),
+    ];
+    assert_eq!(names(&s, &seasons).1, 1, "season has a real episode");
+}
+
+/// Search must ignore accents and match `OriginalTitle`, with exact and
+/// prefix matches first.
+#[test]
+fn search_cleans_names_and_matches_original_title() {
+    let s = snap_of(vec![
+        titled(1, "Zed", "zed", Some("Le Fabuleux")),
+        titled(2, "amelie 2", "amelie 2", None),
+        titled(3, "Amélie", "amélie", None),
+    ]);
+    assert_eq!(
+        names(&s, &with(&[("SearchTerm", "amelie")])).0,
+        ["Amélie", "amelie 2"]
+    );
+    assert_eq!(names(&s, &with(&[("SearchTerm", "fabuleux")])).0, ["Zed"]);
+}
+
+/// `SortBy=Name` orders by the diacritic-free name, not the raw one.
+#[test]
+fn name_sort_ignores_diacritics() {
+    let s = snap_of(vec![
+        titled(1, "b", "b", None),
+        titled(2, "Á", "á", None),
+        titled(3, "a", "a", None),
+    ]);
+    assert_eq!(names(&s, &with(&[("SortBy", "Name")])).0, ["a", "Á", "b"]);
+}
+
+/// `NameStartsWith` compares SortName only (`The Office` sorts as `office`).
+#[test]
+fn name_starts_with_uses_sort_name_only() {
+    let s = snap_of(vec![titled(1, "The Office", "office", None)]);
+    assert!(names(&s, &with(&[("NameStartsWith", "t")])).0.is_empty());
+    assert_eq!(
+        names(&s, &with(&[("NameStartsWith", "o")])).0,
+        ["The Office"]
+    );
+}
+
+/// Program flags never hold for library items, except `IsMovie=true` on
+/// movies and tag flags, which match tags.
+#[test]
+fn program_flags_follow_the_repository() {
+    let mut kids = titled(1, "Kid", "kid", None);
+    kids.tags = vec!["Kids".into()];
+    let s = snap_of(vec![kids, titled(2, "Other", "other", None)]);
+    assert_eq!(names(&s, &with(&[("IsMovie", "true")])).1, 2);
+    assert_eq!(names(&s, &with(&[("IsMovie", "false")])).1, 0);
+    assert_eq!(names(&s, &with(&[("IsSeries", "true")])).1, 0);
+    assert_eq!(names(&s, &with(&[("IsSeries", "false")])).1, 2);
+    assert_eq!(names(&s, &with(&[("IsAiring", "false")])).1, 0);
+    assert_eq!(names(&s, &with(&[("IsKids", "true")])).0, ["Kid"]);
+    assert_eq!(names(&s, &with(&[("IsKids", "false")])).0, ["Other"]);
+}

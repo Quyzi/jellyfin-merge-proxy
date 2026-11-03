@@ -151,6 +151,9 @@ pub async fn views(st: &Shared, c: &Client, force: bool) -> Vec<Value> {
                 t["DisplayPreferencesId"] = json!(id);
                 t["Etag"] = json!(id);
                 t["ParentId"] = json!(st.root_id);
+                if t.get("RecursiveItemCount").is_some() {
+                    t["RecursiveItemCount"] = json!(merged_item_count(st, c, &members));
+                }
                 let member_ids = members
                     .iter()
                     .filter_map(|(u, v)| {
@@ -185,4 +188,83 @@ pub(super) async fn resolve_or_refresh(st: &Shared, id: &str) -> Option<Target> 
     }
     views(st, &anon_client(st), true).await;
     st.ids.resolve(id)
+}
+
+fn flag(q: &[(String, String)], key: &str, default: bool) -> bool {
+    match q_get(q, key) {
+        Some(v) if v.eq_ignore_ascii_case("true") => true,
+        Some(v) if v.eq_ignore_ascii_case("false") => false,
+        _ => default,
+    }
+}
+
+/// `GET UserViews` as Jellyfin presents it (`UserViewManager.GetUserViews`):
+/// live TV and channels only with `includeExternalContent` (default true),
+/// libraries the user hid from "My Media" only with `includeHidden`, and
+/// the user's own order (`OrderedViews`, then `SortName`).
+pub(crate) fn present_views(
+    st: &Shared,
+    c: &Client,
+    q: &[(String, String)],
+    mut v: Vec<Value>,
+) -> Vec<Value> {
+    let text = |x: &Value, k: &str| x.get(k).and_then(Value::as_str).map(str::to_string);
+    if !flag(q, "includeExternalContent", true) {
+        v.retain(|x| {
+            text(x, "Type").as_deref() != Some("Channel")
+                && !text(x, "CollectionType").is_some_and(|t| t.eq_ignore_ascii_case("livetv"))
+        });
+    }
+    if !flag(q, "includeHidden", false) {
+        let hidden = st.local.settings.my_media_excludes(&c.user_id);
+        v.retain(|x| text(x, "Id").is_none_or(|id| !hidden.contains(&id)));
+    }
+    let has_playlists_view = v
+        .iter()
+        .any(|x| text(x, "CollectionType").is_some_and(|t| t.eq_ignore_ascii_case("playlists")));
+    if !has_playlists_view && !st.local.playlists.for_user(&c.user_id).is_empty() {
+        v.push(playlists_view_dto(st));
+    }
+    let order = st.local.settings.ordered_views(&c.user_id);
+    let key = |x: &Value| {
+        let position = text(x, "Id")
+            .and_then(|id| order.iter().position(|o| *o == id))
+            .unwrap_or(usize::MAX);
+        let name = text(x, "SortName")
+            .or_else(|| text(x, "Name"))
+            .unwrap_or_default();
+        (position, name.to_uppercase())
+    };
+    v.sort_by_cached_key(key);
+    v
+}
+
+/// `RecursiveItemCount` of a merged library: the canonical non-folder,
+/// non-virtual items the user may see in any member library
+/// (`Folder.GetRecursiveChildCount`). Before the index is built, the sum of
+/// the members' own counts.
+fn merged_item_count(st: &Shared, c: &Client, members: &[(ServerId, Value)]) -> u64 {
+    let Some(snap) = st.index.latest() else {
+        return members
+            .iter()
+            .filter_map(|(_, v)| v.get("RecursiveItemCount").and_then(Value::as_u64))
+            .sum();
+    };
+    let libs: std::collections::HashSet<(ServerId, String)> = members
+        .iter()
+        .filter_map(|(u, v)| {
+            let id = UpstreamItemId::parse(v.get("Id")?.as_str()?)?;
+            Some((*u, id.as_str().to_string()))
+        })
+        .collect();
+    snap.items
+        .iter()
+        .enumerate()
+        .filter(|(i, item)| {
+            item.libraries.iter().any(|l| libs.contains(l))
+                && !snap.copies[item.copies[0]].entry.is_folder
+                && !snap.is_virtual(*i)
+                && !st.parental.blocks(&c.user_id, &item.id)
+        })
+        .count() as u64
 }

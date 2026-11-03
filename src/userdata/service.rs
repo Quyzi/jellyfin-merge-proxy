@@ -9,6 +9,15 @@ use crate::index::snapshot::Snapshot;
 use crate::types::ProxyItemId;
 use arc_swap::ArcSwap;
 use std::sync::Arc;
+use tokio::sync::broadcast;
+
+/// A user's item data changed (not sent for playback progress, as
+/// Jellyfin does not either).
+#[derive(Debug, Clone)]
+pub struct UserDataEvent {
+    pub user: String,
+    pub items: Vec<ProxyItemId>,
+}
 
 /// Which playback report a `Sessions/Playing*` request is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +50,7 @@ pub struct UserDataService {
     table: Arc<dyn WatchState>,
     index: Arc<IndexService>,
     cfg: ArcSwap<UserDataConfig>,
+    events: broadcast::Sender<UserDataEvent>,
 }
 
 impl UserDataService {
@@ -49,11 +59,16 @@ impl UserDataService {
             table,
             index,
             cfg: ArcSwap::from_pointee(cfg.clone()),
+            events: broadcast::channel(1024).0,
         }
     }
 
     pub fn configure(&self, cfg: &UserDataConfig) {
         self.cfg.store(Arc::new(cfg.clone()));
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<UserDataEvent> {
+        self.events.subscribe()
     }
 
     pub fn config(&self) -> Arc<UserDataConfig> {
@@ -127,41 +142,78 @@ impl UserDataService {
         f: &dyn Fn(&mut ItemState),
     ) -> ItemState {
         let key = self.key(id);
-        self.table
+        let state = self
+            .table
             .update(user, std::slice::from_ref(&key), op, f)
             .pop()
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if op != "progress" {
+            let _ = self.events.send(UserDataEvent {
+                user: user.to_string(),
+                items: vec![key],
+            });
+        }
+        state
     }
 
-    /// Apply a playback report (Jellyfin's play-state rules). A stop for
-    /// an item of unknown runtime keeps the position and does not mark it
-    /// played.
+    /// Apply a playback report (Jellyfin's play-state rules). For an item
+    /// the index does not know, Progress and a Stopped with a position
+    /// store the position only, since neither runtime nor kind is known.
+    #[allow(clippy::too_many_arguments)]
     pub fn playback(
         &self,
         user: &str,
         id: &ProxyItemId,
         ev: PlayEvent,
         position: Option<i64>,
+        failed: bool,
         now: &str,
     ) -> ItemState {
         let rules = self.rules();
-        match ev {
-            PlayEvent::Start => self.change(user, id, "start", &|s| rules::start(s, now)),
-            PlayEvent::Progress => {
-                self.change(user, id, "progress", &|s| rules::progress(s, position))
+        let known = self.snap().and_then(|snap| {
+            let e = snap.primary(snap.item(id)?);
+            Some((e.runtime, e.kind.clone()))
+        });
+        let store_position = |s: &mut ItemState| {
+            if let Some(p) = position {
+                s.position_ticks = p.max(0);
             }
-            PlayEvent::Stopped => match self.runtime(id) {
-                Some(rt) => self.change(user, id, "stopped", &|s| {
-                    rules::stopped(s, position, Some(rt), &rules, now);
-                }),
-                None => self.change(user, id, "stopped", &|s| rules::progress(s, position)),
-            },
+        };
+        match (ev, &known) {
+            (PlayEvent::Start, k) => {
+                let kind = k.as_ref().map(|k| k.1.as_str());
+                self.change(user, id, "start", &|s| rules::start(s, kind, now))
+            }
+            (PlayEvent::Progress, Some((rt, kind))) => self.change(user, id, "progress", &|s| {
+                rules::progress(s, position, *rt, Some(kind), &rules)
+            }),
+            (PlayEvent::Progress, None) => self.change(user, id, "progress", &store_position),
+            (PlayEvent::Stopped, Some((rt, kind))) => self.change(user, id, "stopped", &|s| {
+                rules::stopped(s, position, *rt, Some(kind), &rules, failed);
+            }),
+            (PlayEvent::Stopped, None) if position.is_some() => {
+                if failed {
+                    self.own(user, id)
+                } else {
+                    self.change(user, id, "stopped", &store_position)
+                }
+            }
+            (PlayEvent::Stopped, None) => self.change(user, id, "stopped", &|s| {
+                rules::stopped(s, None, None, None, &rules, failed);
+            }),
         }
     }
 
-    /// Mark played/unplayed. A series or season marks all its episodes
-    /// (as Jellyfin does for folders).
-    pub fn set_played(&self, user: &str, id: &ProxyItemId, played: bool, now: &str) {
+    /// Mark played/unplayed (`date` = the `DatePlayed` parameter). A series
+    /// or season marks all its non-virtual episodes (`Folder.MarkPlayed`).
+    pub fn set_played(
+        &self,
+        user: &str,
+        id: &ProxyItemId,
+        played: bool,
+        date: Option<&str>,
+        now: &str,
+    ) {
         let op = if played { "played" } else { "unplayed" };
         let mut keys = vec![self.key(id)];
         if let Some(snap) = self.snap() {
@@ -169,12 +221,18 @@ impl UserDataService {
                 keys.extend(
                     snap.episodes_of(i)
                         .iter()
+                        .filter(|e| !snap.is_virtual(**e))
                         .map(|e| snap.items[*e].id.clone()),
                 );
             }
         }
-        self.table
-            .update(user, &keys, op, &|s| rules::mark_played(s, played, now));
+        self.table.update(user, &keys, op, &|s| {
+            rules::mark_played(s, played, date, now)
+        });
+        let _ = self.events.send(UserDataEvent {
+            user: user.to_string(),
+            items: keys,
+        });
     }
 }
 
@@ -185,14 +243,19 @@ pub fn aggregate(
     mut own: ItemState,
     get: &dyn Fn(&ProxyItemId) -> Option<ItemState>,
 ) -> (ItemState, Option<FolderCounts>) {
-    let eps = snap.episodes_of(idx);
+    let eps: Vec<usize> = snap
+        .episodes_of(idx)
+        .iter()
+        .copied()
+        .filter(|e| !snap.is_virtual(*e))
+        .collect();
     if eps.is_empty() {
         return (own, None);
     }
     let mut unplayed = 0;
     let mut last: Option<String> = None;
     let mut count = 0;
-    for e in eps {
+    for e in &eps {
         let s = get(&snap.items[*e].id).unwrap_or_default();
         if !s.played {
             unplayed += 1;

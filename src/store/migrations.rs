@@ -31,6 +31,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "userdata",
         sql: include_str!("migrations/0003_userdata.sql"),
     },
+    Migration {
+        version: 4,
+        name: "local",
+        sql: include_str!("migrations/0004_local.sql"),
+    },
 ];
 
 /// Schema version this binary writes.
@@ -95,14 +100,17 @@ mod tests {
             tables(&conn),
             [
                 "canonical_ids",
+                "display_prefs",
                 "ids",
                 "index_entries",
                 "index_servers",
                 "merged_views",
+                "playlists",
                 "sessions",
                 "sibling_links",
                 "user_data",
-                "user_data_seeded"
+                "user_data_seeded",
+                "user_settings"
             ]
         );
         // Running again is a no-op (the CREATE TABLEs would fail otherwise).
