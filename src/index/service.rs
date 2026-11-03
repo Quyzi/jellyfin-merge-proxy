@@ -50,9 +50,6 @@ pub struct IndexService {
     built: Mutex<Option<BuildKey>>,
     refreshing: tokio::sync::Mutex<()>,
     wake: tokio::sync::Notify,
-    /// Live servers whose catalog the index does not hold yet (newly added,
-    /// down at start, or failing to crawl). Their items cannot be rated.
-    uncovered: Mutex<std::collections::HashSet<ServerId>>,
 }
 
 impl IndexService {
@@ -104,7 +101,6 @@ impl IndexService {
             built: Mutex::new(None),
             refreshing: tokio::sync::Mutex::new(()),
             wake: tokio::sync::Notify::new(),
-            uncovered: Mutex::new(Default::default()),
         }
     }
 
@@ -315,23 +311,6 @@ impl IndexService {
             .any(|b| !b.is_down() && !crawled.contains_key(b.name()))
     }
 
-    /// Record which live servers in `set` the index does not cover.
-    pub fn note_coverage(&self, set: &[Arc<dyn MediaBackend>]) {
-        let missing: std::collections::HashSet<ServerId> = {
-            let crawled = self.crawled.lock().unwrap();
-            set.iter()
-                .filter(|b| !b.is_down() && !crawled.contains_key(b.name()))
-                .map(|b| b.id())
-                .collect()
-        };
-        *self.uncovered.lock().unwrap() = missing;
-    }
-
-    /// Whether `server` is live but not in the index (see [`Self::note_coverage`]).
-    pub fn is_uncovered(&self, server: ServerId) -> bool {
-        self.uncovered.lock().unwrap().contains(&server)
-    }
-
     /// Background loop: crawl when due or when a new server shows up,
     /// rebuild when inputs change.
     pub fn spawn(self: &Arc<Self>, weak: std::sync::Weak<crate::AppState>) {
@@ -356,7 +335,6 @@ impl IndexService {
                             last = last_try;
                         }
                     }
-                    me.note_coverage(&set[..]);
                     me.rebuild(&cfg, &set[..], st.ids.as_ref());
                 }
                 drop((st, set));

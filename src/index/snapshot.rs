@@ -89,6 +89,9 @@ pub struct Snapshot {
     /// Rating name (lower case) -> score, from every server's rating table
     /// (the first server that knows a name wins).
     pub ratings: HashMap<String, i64>,
+    /// Servers whose crawled catalog this snapshot was built from. Ids of
+    /// other servers are unknown to it, not merely absent.
+    servers: std::collections::HashSet<ServerId>,
 }
 
 /// What a build produced besides the snapshot.
@@ -149,7 +152,10 @@ impl Snapshot {
         for (g, c) in ids.iter().zip(&canon) {
             map.insert(c.clone(), g.clone());
         }
-        let mut snap = Snapshot::default();
+        let mut snap = Snapshot {
+            servers: servers.iter().map(|s| s.server).collect(),
+            ..Default::default()
+        };
         for s in servers {
             for (name, score) in &s.ratings {
                 snap.ratings.entry(name.to_lowercase()).or_insert(*score);
@@ -337,6 +343,11 @@ impl Snapshot {
             return false;
         }
         !e.is("Season") || self.episodes_of(idx).iter().all(|i| self.is_virtual(*i))
+    }
+
+    /// Whether `server`'s catalog is part of this snapshot.
+    pub fn covers(&self, server: ServerId) -> bool {
+        self.servers.contains(&server)
     }
 
     pub fn len(&self) -> usize {

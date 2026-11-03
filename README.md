@@ -255,8 +255,9 @@ inherit their series' rating. Rating names are resolved through the servers'
 rating tables, collected by the crawl. Limits **fail closed**: an unknown
 rating name allows only score 0, until the first crawl a restricted user
 sees no individual items and no rated videos in lists, and items of a live
-server the index has not crawled yet (just added, or down when the proxy
-started) cannot be opened until it has been. Limits are judged against the index, so a config that sets one with
+server that is not in the index yet (just added, down when the proxy
+started, or in its first crawl) cannot be opened until the index includes
+it. Limits are judged against the index, so a config that sets one with
 `[index] enabled = false` is rejected.
 Blocked items are left out of lists with exact totals, return 404 when asked
 for directly, and are kept out of NextUp, Resume, search, playlists and

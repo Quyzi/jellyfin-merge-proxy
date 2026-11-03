@@ -92,7 +92,8 @@ impl ParentalService {
     /// Whether `user` may not see item `id`. Indexed items are judged by
     /// rating. For a restricted user this fails closed: before the first
     /// index exists everything is blocked, and an id the index does not
-    /// hold is blocked while its server is live but not crawled yet. Other
+    /// hold is blocked when its server is not in the snapshot (added,
+    /// down at start, or still being crawled for the first time). Other
     /// unknown ids (kinds the index does not keep, items newer than the last
     /// crawl) pass; fan-out lists are filtered by
     /// [`super::filter::ParentalFilter`].
@@ -108,7 +109,7 @@ impl ParentalService {
             Some(i) => !allows_item(&p, &snap, i),
             None => matches!(
                 self.ids.decode(id),
-                Some(crate::ids::Target::Item { upstream, .. }) if self.index.is_uncovered(upstream)
+                Some(crate::ids::Target::Item { upstream, .. }) if !snap.covers(upstream)
             ),
         };
         if blocked {
