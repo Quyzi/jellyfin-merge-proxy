@@ -62,7 +62,7 @@ pub fn next_up(
             .episodes_of(s)
             .iter()
             .copied()
-            .filter(|e| snap.items[*e].series == Some(s) && is_live(*e))
+            .filter(|e| snap.items[*e].series == Some(s) && is_live(*e) && !snap.is_virtual(*e))
             .collect();
         eps.sort_by_key(|e| order(snap, *e));
         let states: Vec<ItemState> = eps.iter().map(|e| state(*e)).collect();

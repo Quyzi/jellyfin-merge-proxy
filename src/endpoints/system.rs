@@ -5,8 +5,8 @@ use crate::dto;
 use crate::handler;
 use crate::proxy::{self, ok_json, Client, Req};
 use crate::Shared;
-use axum::http::header;
-use axum::response::{IntoResponse, Redirect};
+use axum::http::{header, Method, StatusCode};
+use axum::response::{IntoResponse, Redirect, Response};
 use serde_json::json;
 
 pub fn routes() -> Vec<Route> {
@@ -19,6 +19,15 @@ pub fn routes() -> Vec<Route> {
             .at("branding/css")
             .at("branding/css.css"),
         Route::public("quickconnect", handler!(quickconnect)).at("quickconnect/enabled"),
+        Route::public("quickconnect-initiate", handler!(quickconnect_disabled))
+            .at("quickconnect/initiate")
+            .methods(&[Method::GET, Method::POST]),
+        Route::public("quickconnect-connect", handler!(quickconnect_connect))
+            .at("quickconnect/connect")
+            .get(),
+        Route::auth("quickconnect-authorize", handler!(quickconnect_authorize))
+            .at("quickconnect/authorize")
+            .post(),
         Route::public("users-public", handler!(users_public)).at("users/public"),
         Route::public("login", handler!(login))
             .at("users/authenticatebyname")
@@ -70,6 +79,39 @@ async fn css(_st: &Shared, _r: Req, _c: &Client) -> HandlerResult {
 
 async fn quickconnect(_st: &Shared, _r: Req, _c: &Client) -> HandlerResult {
     done(ok_json(json!(false)))
+}
+
+/// Quick Connect stays disabled (`Enabled` says so); Jellyfin answers its
+/// other routes 401 in that case (`QuickConnectController.cs`).
+fn quickconnect_off() -> Response {
+    proxy::err_resp(StatusCode::UNAUTHORIZED, "Quick connect is disabled")
+}
+
+async fn quickconnect_disabled(_st: &Shared, _r: Req, _c: &Client) -> HandlerResult {
+    done(quickconnect_off())
+}
+
+/// `secret` is a required query parameter.
+async fn quickconnect_connect(_st: &Shared, r: Req, _c: &Client) -> HandlerResult {
+    if proxy::q_get(&r.query, "secret").is_none() {
+        return done(missing_param());
+    }
+    done(quickconnect_off())
+}
+
+/// `code` is a required query parameter.
+async fn quickconnect_authorize(_st: &Shared, r: Req, _c: &Client) -> HandlerResult {
+    if proxy::q_get(&r.query, "code").is_none() {
+        return done(missing_param());
+    }
+    done(quickconnect_off())
+}
+
+fn missing_param() -> Response {
+    proxy::err_resp(
+        StatusCode::BAD_REQUEST,
+        "One or more validation errors occurred.",
+    )
 }
 
 async fn users_public(_st: &Shared, _r: Req, _c: &Client) -> HandlerResult {

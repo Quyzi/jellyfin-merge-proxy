@@ -208,7 +208,7 @@ pub async fn indexed_names(
     let starts = lower(q_get(q, "NameStartsWith"));
     let from = lower(q_get(q, "NameStartsWithOrGreater"));
     let below = lower(q_get(q, "NameLessThan"));
-    let search = q_get(q, "SearchTerm").map(crate::index::entry::normalize_name);
+    let search = q_get(q, "SearchTerm").map(crate::index::clean::clean);
     let mut list: Vec<(String, usize)> = hit
         .into_iter()
         .filter(|ni| snap.names[*ni].kind == kind)
@@ -218,11 +218,28 @@ pub async fn indexed_names(
                 && from.as_ref().is_none_or(|p| n.as_str() >= p.as_str())
                 && below.as_ref().is_none_or(|p| n.as_str() < p.as_str())
                 && search.as_ref().is_none_or(|s| {
-                    crate::index::entry::normalize_name(&snap.names[*ni].name).contains(s.as_str())
+                    crate::index::clean::clean(&snap.names[*ni].name).contains(s.as_str())
                 })
         })
         .collect();
-    list.sort();
+    if let Some(s) = &search {
+        let prefix = format!("{s} ");
+        list.sort_by_cached_key(|(n, ni)| {
+            let c = crate::index::clean::clean(&snap.names[*ni].name);
+            let rel = if c == *s {
+                0
+            } else if c.starts_with(&prefix) {
+                1
+            } else if c.starts_with(s.as_str()) {
+                2
+            } else {
+                3
+            };
+            (rel, n.clone())
+        });
+    } else {
+        list.sort();
+    }
     if q_get(q, "SortOrder").is_some_and(|o| o.to_ascii_lowercase().starts_with("desc")) {
         list.reverse();
     }
@@ -274,9 +291,14 @@ pub async fn indexed_filters(st: &Shared, r: &Req, c: &Client, v2: bool) -> Opti
         &snap,
         &r.query,
         endpoint,
-        &[
-            "isairing", "isseries", "ismovie", "iskids", "issports", "isnews",
-        ],
+        // The legacy endpoint ignores the program flags; Filters2 applies them.
+        if v2 {
+            &[]
+        } else {
+            &[
+                "isairing", "isseries", "ismovie", "iskids", "issports", "isnews",
+            ]
+        },
         &c.user_id,
     )?;
     index_outcome(endpoint, "index");

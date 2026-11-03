@@ -1,6 +1,5 @@
 //! Synthesised Jellyfin DTOs for things the proxy answers itself.
 
-use crate::auth::Session;
 use serde_json::{json, Value};
 
 pub fn now_iso() -> String {
@@ -51,7 +50,14 @@ pub fn system_info(name: &str, id: &str, version: &str, local_address: &str) -> 
     v
 }
 
-pub fn user_dto(name: &str, id: &str, server_id: &str, server_name: &str) -> Value {
+pub fn user_dto(
+    name: &str,
+    id: &str,
+    server_id: &str,
+    server_name: &str,
+    configuration: Value,
+    policy: Value,
+) -> Value {
     let now = now_iso();
     json!({
         "Name": name,
@@ -64,103 +70,16 @@ pub fn user_dto(name: &str, id: &str, server_id: &str, server_name: &str) -> Val
         "EnableAutoLogin": false,
         "LastLoginDate": now,
         "LastActivityDate": now,
-        "Configuration": {
-            "PlayDefaultAudioTrack": true,
-            "SubtitleLanguagePreference": "",
-            "DisplayMissingEpisodes": false,
-            "GroupedFolders": [],
-            "SubtitleMode": "Default",
-            "DisplayCollectionsView": false,
-            "EnableLocalPassword": false,
-            "OrderedViews": [],
-            "LatestItemsExcludes": [],
-            "MyMediaExcludes": [],
-            "HidePlayedInLatest": true,
-            "RememberAudioSelections": true,
-            "RememberSubtitleSelections": true,
-            "EnableNextEpisodeAutoPlay": true,
-            "CastReceiverId": "F007D354"
-        },
-        "Policy": {
-            "IsAdministrator": false,
-            "IsHidden": true,
-            "EnableCollectionManagement": false,
-            "EnableSubtitleManagement": false,
-            "EnableLyricManagement": false,
-            "IsDisabled": false,
-            "BlockedTags": [],
-            "AllowedTags": [],
-            "EnableUserPreferenceAccess": true,
-            "AccessSchedules": [],
-            "BlockUnratedItems": [],
-            "EnableRemoteControlOfOtherUsers": false,
-            "EnableSharedDeviceControl": false,
-            "EnableRemoteAccess": true,
-            "EnableLiveTvManagement": false,
-            "EnableLiveTvAccess": true,
-            "EnableMediaPlayback": true,
-            "EnableAudioPlaybackTranscoding": true,
-            "EnableVideoPlaybackTranscoding": true,
-            "EnablePlaybackRemuxing": true,
-            "ForceRemoteSourceTranscoding": false,
-            "EnableContentDeletion": false,
-            "EnableContentDeletionFromFolders": [],
-            "EnableContentDownloading": true,
-            "EnableSyncTranscoding": true,
-            "EnableMediaConversion": false,
-            "EnabledDevices": [],
-            "EnableAllDevices": true,
-            "EnabledChannels": [],
-            "EnableAllChannels": true,
-            "EnabledFolders": [],
-            "EnableAllFolders": true,
-            "InvalidLoginAttemptCount": 0,
-            "LoginAttemptsBeforeLockout": -1,
-            "MaxActiveSessions": 0,
-            "EnablePublicSharing": false,
-            "BlockedMediaFolders": [],
-            "BlockedChannels": [],
-            "RemoteClientBitrateLimit": 0,
-            "AuthenticationProviderId": "Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider",
-            "PasswordResetProviderId": "Jellyfin.Server.Implementations.Users.DefaultPasswordResetProvider",
-            "SyncPlayAccess": "None"
-        }
+        "Configuration": configuration,
+        "Policy": policy
     })
 }
 
-pub fn session_info(s: &Session, server_id: &str) -> Value {
-    let now = now_iso();
-    json!({
-        "PlayState": {"CanSeek": false, "IsPaused": false, "IsMuted": false, "RepeatMode": "RepeatNone", "PlaybackOrder": "Default"},
-        "AdditionalUsers": [],
-        "Capabilities": {"PlayableMediaTypes": [], "SupportedCommands": [], "SupportsMediaControl": false, "SupportsPersistentIdentifier": true},
-        "RemoteEndPoint": "",
-        "PlayableMediaTypes": [],
-        "Id": s.session_id,
-        "UserId": s.user_id,
-        "UserName": s.user_name,
-        "Client": s.client,
-        "LastActivityDate": now,
-        "LastPlaybackCheckIn": "0001-01-01T00:00:00.0000000Z",
-        "DeviceName": s.device_name,
-        "DeviceId": s.device_id,
-        "ApplicationVersion": s.app_version,
-        "IsActive": true,
-        "SupportsMediaControl": false,
-        "SupportsRemoteControl": false,
-        "NowPlayingQueue": [],
-        "NowPlayingQueueFullItems": [],
-        "HasCustomDeviceName": false,
-        "ServerId": server_id,
-        "SupportedCommands": []
-    })
-}
-
-pub fn auth_result(user: Value, s: &Session, server_id: &str) -> Value {
+pub fn auth_result(user: Value, session_info: Value, token: &str, server_id: &str) -> Value {
     json!({
         "User": user,
-        "SessionInfo": session_info(s, server_id),
-        "AccessToken": s.token,
+        "SessionInfo": session_info,
+        "AccessToken": token,
         "ServerId": server_id
     })
 }
@@ -188,23 +107,6 @@ pub fn root_folder(id: &str, server_id: &str) -> Value {
         "BackdropImageTags": [],
         "LocationType": "FileSystem",
         "MediaType": "Unknown"
-    })
-}
-
-pub fn display_prefs(id: &str, client: &str) -> Value {
-    json!({
-        "Id": id,
-        "SortBy": "SortName",
-        "RememberIndexing": false,
-        "PrimaryImageHeight": 250,
-        "PrimaryImageWidth": 250,
-        "CustomPrefs": {},
-        "ScrollDirection": "Horizontal",
-        "ShowBackdrop": true,
-        "RememberSorting": false,
-        "SortOrder": "Ascending",
-        "ShowSidebar": false,
-        "Client": client
     })
 }
 

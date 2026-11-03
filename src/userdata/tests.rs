@@ -42,22 +42,33 @@ fn by_name(snap: &Snapshot, name: &str) -> usize {
 fn stopped_follows_jellyfin_thresholds() {
     let r = ResumeRules::default();
     let rt = Some(60 * MIN);
+    let k = Some("Movie");
     let mut s = ItemState::default();
     assert!(
-        !rules::stopped(&mut s, Some(MIN), rt, &r, "d"),
+        !rules::stopped(&mut s, Some(MIN), rt, k, &r, false),
         "<5% resets"
     );
     assert_eq!(s.position_ticks, 0);
-    assert!(!rules::stopped(&mut s, Some(30 * MIN), rt, &r, "d"));
+    assert!(!rules::stopped(&mut s, Some(30 * MIN), rt, k, &r, false));
     assert_eq!(s.position_ticks, 30 * MIN, "resume point kept");
     assert!(!s.played);
-    assert!(rules::stopped(&mut s, Some(58 * MIN), rt, &r, "d"), ">90%");
+    assert!(
+        rules::stopped(&mut s, Some(58 * MIN), rt, k, &r, false),
+        ">90%"
+    );
     assert!(s.played && s.position_ticks == 0);
     let mut short = ItemState::default();
     let clip = Some(MIN);
-    assert!(rules::stopped(&mut short, Some(MIN / 2), clip, &r, "d"));
+    assert!(rules::stopped(
+        &mut short,
+        Some(MIN / 2),
+        clip,
+        k,
+        &r,
+        false
+    ));
     let mut start = ItemState::default();
-    rules::start(&mut start, "now");
+    rules::start(&mut start, Some("Movie"), "now");
     assert_eq!(
         (start.play_count, start.last_played.as_deref()),
         (1, Some("now"))
@@ -82,7 +93,7 @@ fn users_are_independent_and_state_persists() {
     let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
     let svc = service(store.clone());
     let movie = pid(1);
-    svc.set_played("alice", &movie, true, "2026-01-01T00:00:00Z");
+    svc.set_played("alice", &movie, true, None, "2026-01-01T00:00:00Z");
     svc.change("bob", &movie, "favorite", &|s| s.favorite = true);
     assert!(svc.own("alice", &movie).played);
     assert!(!svc.own("alice", &movie).favorite);
@@ -97,9 +108,9 @@ fn users_are_independent_and_state_persists() {
 fn playback_without_known_runtime_keeps_position() {
     let svc = service(Arc::new(MemoryStore::new()));
     let item = pid(7);
-    svc.playback("u", &item, PlayEvent::Start, None, "t1");
-    svc.playback("u", &item, PlayEvent::Progress, Some(42), "t1");
-    let s = svc.playback("u", &item, PlayEvent::Stopped, Some(99), "t2");
+    svc.playback("u", &item, PlayEvent::Start, None, false, "t1");
+    svc.playback("u", &item, PlayEvent::Progress, Some(42), false, "t1");
+    let s = svc.playback("u", &item, PlayEvent::Stopped, Some(99), false, "t2");
     assert_eq!((s.play_count, s.position_ticks, s.played), (1, 99, false));
     assert_eq!(PlayEvent::from_seg("Stopped"), Some(PlayEvent::Stopped));
     assert_eq!(PlayEvent::from_seg("ping"), None);
@@ -138,7 +149,12 @@ fn split_show_has_one_next_up_across_servers() {
         "nothing played"
     );
     table.update("u", &[s1e1, s1e2], "played", &|s| {
-        rules::mark_played(s, true, "2026-01-01T00:00:00Z")
+        rules::mark_played(
+            s,
+            true,
+            Some("2026-01-01T00:00:00Z"),
+            "2026-01-01T00:00:00Z",
+        )
     });
     let state = |i: usize| table.get("u", &snap.items[i].id).unwrap_or_default();
     assert_eq!(next_up(&snap, &|_| true, &state, &q), vec![s2e1]);
@@ -162,14 +178,14 @@ fn series_state_is_derived_from_its_episodes() {
     let series = by_name(&snap, "Series10");
     let ep = |n: &str| snap.items[by_name(&snap, n)].id.clone();
     table.update("u", &[ep("S1E1")], "played", &|s| {
-        rules::mark_played(s, true, "d1")
+        rules::mark_played(s, true, Some("d1"), "d1")
     });
     let get = |k: &ProxyItemId| table.get("u", k);
     let (s, c) = aggregate(&snap, series, ItemState::default(), &get);
     let c = c.unwrap();
     assert_eq!((c.total, c.unplayed, s.played), (3, 2, false));
     table.update("u", &[ep("S1E2"), ep("S2E1")], "played", &|s| {
-        rules::mark_played(s, true, "d2")
+        rules::mark_played(s, true, Some("d2"), "d2")
     });
     let get = |k: &ProxyItemId| table.get("u", k);
     let (s, c) = aggregate(&snap, series, ItemState::default(), &get);
@@ -193,4 +209,64 @@ fn overlay_replaces_upstream_user_data() {
     assert_eq!(ud["IsFavorite"], json!(true));
     assert_eq!(ud["Key"], json!("k"));
     assert_eq!(ud["ItemId"], json!(id));
+}
+
+/// Jellyfin's `MarkPlayed`: with no date the play count only rises to 1 and
+/// the last played date is kept; unplayed clears the date.
+#[test]
+fn mark_played_follows_base_item_rules() {
+    let mut s = ItemState {
+        play_count: 3,
+        last_played: Some("old".into()),
+        ..Default::default()
+    };
+    rules::mark_played(&mut s, true, None, "now");
+    assert_eq!((s.play_count, s.last_played.as_deref()), (3, Some("old")));
+    rules::mark_played(&mut s, true, Some("dated"), "now");
+    assert_eq!((s.play_count, s.last_played.as_deref()), (4, Some("dated")));
+    rules::mark_played(&mut s, false, None, "now");
+    assert_eq!(
+        (s.play_count, s.last_played.clone(), s.played),
+        (0, None, false)
+    );
+}
+
+/// An indexed item with no known runtime is assumed fully played on
+/// progress; a stop without a position counts a play; a failed stop and a
+/// resumable start change nothing / only the count.
+#[test]
+fn play_state_edge_rules() {
+    let r = ResumeRules::default();
+    let mut s = ItemState::default();
+    rules::progress(&mut s, Some(5), None, Some("Movie"), &r);
+    assert!(s.played, "no runtime means played");
+    let mut s = ItemState::default();
+    assert!(rules::stopped(
+        &mut s,
+        None,
+        Some(60 * MIN),
+        Some("Movie"),
+        &r,
+        false
+    ));
+    assert_eq!(s.play_count, 1);
+    let mut s = ItemState::default();
+    rules::stopped(
+        &mut s,
+        Some(30 * MIN),
+        Some(60 * MIN),
+        Some("Movie"),
+        &r,
+        true,
+    );
+    assert_eq!(
+        (s.play_count, s.position_ticks),
+        (0, 0),
+        "failed stop ignored"
+    );
+    let mut s = ItemState::default();
+    rules::start(&mut s, Some("Audio"), "t");
+    assert!(s.played, "audio has no resume point");
+    rules::start(&mut s, Some("Movie"), "t");
+    assert!(!s.played);
 }

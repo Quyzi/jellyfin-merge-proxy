@@ -21,6 +21,7 @@ struct Inner {
     session_map: HashMap<String, Session>,
     index: super::index::MemIndex,
     userdata: super::userdata::MemUserData,
+    local: super::local::MemLocal,
 }
 
 impl MemoryStore {
@@ -130,6 +131,51 @@ impl UserDataStore for MemoryStore {
     }
     fn mark_seeded(&self, user: &str, server: &str) -> Result<(), StoreError> {
         self.inner.lock().unwrap().userdata.mark(user, server);
+        Ok(())
+    }
+}
+
+impl LocalStore for MemoryStore {
+    fn load_settings(&self) -> Result<Vec<(String, serde_json::Value)>, StoreError> {
+        Ok(self.inner.lock().unwrap().local.settings())
+    }
+    fn put_settings(&self, user: &str, v: &serde_json::Value) -> Result<(), StoreError> {
+        self.inner.lock().unwrap().local.put_settings(user, v);
+        Ok(())
+    }
+    fn load_display_prefs(
+        &self,
+    ) -> Result<Vec<(String, String, String, serde_json::Value)>, StoreError> {
+        Ok(self.inner.lock().unwrap().local.prefs())
+    }
+    fn put_display_prefs(
+        &self,
+        user: &str,
+        prefs: &str,
+        client: &str,
+        v: &serde_json::Value,
+    ) -> Result<(), StoreError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .local
+            .put_prefs(user, prefs, client, v);
+        Ok(())
+    }
+    fn load_playlists(&self) -> Result<Vec<serde_json::Value>, StoreError> {
+        Ok(self.inner.lock().unwrap().local.playlists())
+    }
+    fn put_playlist(
+        &self,
+        id: &str,
+        _owner: &str,
+        v: &serde_json::Value,
+    ) -> Result<(), StoreError> {
+        self.inner.lock().unwrap().local.put_playlist(id, v);
+        Ok(())
+    }
+    fn delete_playlist(&self, id: &str) -> Result<(), StoreError> {
+        self.inner.lock().unwrap().local.delete_playlist(id);
         Ok(())
     }
 }

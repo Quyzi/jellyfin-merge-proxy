@@ -1,118 +1,15 @@
-//! Fan-out list endpoints: specs, targets and per-upstream queries.
+//! Fan-out list endpoints: targets and per-upstream queries.
 
 use super::*;
 
-// ---------------------------------------------------------------------------
-// Fan-out lists
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum Shape {
-    QueryResult,
-    Array,
-    SearchHints,
-}
-
-/// How a fan-out list endpoint is queried and merged.
-pub struct ListSpec {
-    /// Metrics label.
-    pub name: &'static str,
-    /// Canonical (modern) upstream path.
-    pub path: Vec<String>,
-    pub shape: Shape,
-    /// Sort when the client sends no SortBy (fan-out only).
-    pub default_sort: &'static [(&'static str, bool)],
-    pub dedupe_items: bool,
-    pub dedupe_by_name: bool,
-}
-
-macro_rules! spec {
-    ($name:ident, $label:expr, [$($seg:expr),*], $shape:expr, $sort:expr, $dd:expr, $dn:expr) => {
-        pub static $name: std::sync::LazyLock<ListSpec> = std::sync::LazyLock::new(|| ListSpec {
-            name: $label,
-            path: vec![$($seg.to_string()),*],
-            shape: $shape,
-            default_sort: $sort,
-            dedupe_items: $dd,
-            dedupe_by_name: $dn,
-        });
-    };
-}
-spec!(
-    ITEMS,
-    "items",
-    ["Items"],
-    Shape::QueryResult,
-    &[],
-    true,
-    false
-);
-spec!(
-    LATEST,
-    "latest",
-    ["Items", "Latest"],
-    Shape::Array,
-    &[("DateCreated", true)],
-    true,
-    false
-);
-spec!(
-    RESUME,
-    "resume",
-    ["UserItems", "Resume"],
-    Shape::QueryResult,
-    &[("DatePlayed", true)],
-    false,
-    false
-);
-spec!(
-    NEXTUP,
-    "nextup",
-    ["Shows", "NextUp"],
-    Shape::QueryResult,
-    &[],
-    false,
-    false
-);
-spec!(
-    SEARCH,
-    "search",
-    ["Search", "Hints"],
-    Shape::SearchHints,
-    &[],
-    true,
-    false
-);
-spec!(
-    SEASONS,
-    "seasons",
-    ["Shows", "{parent}", "Seasons"],
-    Shape::QueryResult,
-    &[("IndexNumber", false)],
-    false,
-    false
-);
-spec!(
-    EPISODES,
-    "episodes",
-    ["Shows", "{parent}", "Episodes"],
-    Shape::QueryResult,
-    &[("ParentIndexNumber", false), ("IndexNumber", false)],
-    false,
-    false
-);
-#[allow(non_upper_case_globals)]
-pub const NAMED: ListSpec = ListSpec {
-    name: "named",
-    path: Vec::new(),
-    shape: Shape::QueryResult,
-    default_sort: &[("SortName", false)],
-    dedupe_items: false,
-    dedupe_by_name: true,
-};
-
 /// Targets of a list request: (upstream, upstream-side parent id).
 pub type ListTargets = Vec<(ServerId, Option<UpstreamItemId>)>;
+
+/// Every configured upstream is marked down (and there is at least one).
+pub(crate) fn all_down(st: &Shared) -> bool {
+    let s = st.backends();
+    !s.is_empty() && s.iter().all(|b| b.is_down())
+}
 
 /// `(server, upstream id)` of `id` and of each of its siblings (copies of
 /// the same series/season on other servers), owner first, active servers
@@ -266,7 +163,7 @@ pub(super) fn query_for(
 }
 
 /// GET `path?query` on one upstream as the proxy's upstream user.
-pub(super) async fn upstream_json(
+pub(crate) async fn upstream_json(
     up: &Arc<dyn MediaBackend>,
     path: &[&str],
     query: &[(&str, &str)],

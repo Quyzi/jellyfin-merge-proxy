@@ -30,3 +30,6 @@ catalog.json
 *.m3u8
 *.srt
 *.vtt
+
+# upstream Jellyfin server source (reference only, v10.11.11)
+/jellyfin-src/

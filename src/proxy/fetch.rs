@@ -16,7 +16,7 @@ pub(super) const DTO_PARAMS: &[&str] = &[
 
 /// The rewritten DTO of every `(server, upstream id)` in `picks` that the
 /// server returned, keyed by the pick.
-pub(super) async fn fetch_dtos(
+pub(crate) async fn fetch_dtos(
     st: &Shared,
     c: &Client,
     picks: &[Option<(ServerId, String)>],
@@ -26,10 +26,11 @@ pub(super) async fn fetch_dtos(
     for (s, id) in picks.iter().flatten() {
         by_server.entry(*s).or_default().push(id.clone());
     }
-    let extra: Vec<(String, String)> = DTO_PARAMS
+    let mut extra: Vec<(String, String)> = DTO_PARAMS
         .iter()
         .filter_map(|k| q_get(client_q, k).map(|v| (k.to_string(), v.to_string())))
         .collect();
+    client_fields::apply(c, &["Items".to_string()], &mut extra);
     let user = c.user_id.as_str();
     let futs = by_server.into_iter().filter_map(|(s, ids)| {
         let up = st.backend(s)?;

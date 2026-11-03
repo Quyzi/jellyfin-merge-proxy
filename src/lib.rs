@@ -22,6 +22,8 @@ pub mod endpoints;
 pub mod error;
 pub mod ids;
 pub mod index;
+pub mod live;
+pub mod local;
 pub mod merge;
 pub mod parental;
 pub mod password;
@@ -33,6 +35,7 @@ pub mod secrets;
 pub mod server;
 pub mod servers;
 pub mod siblings;
+mod state;
 pub mod store;
 pub mod telemetry;
 pub mod tls;
@@ -47,9 +50,8 @@ pub mod upstream {
     pub use crate::backend::{JellyfinBackend as Upstream, MediaBackend};
 }
 
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
@@ -58,11 +60,8 @@ use backend::{BackendFactory, JellyfinFactory, MediaBackend};
 use cache::CatalogCache;
 use config::{Config, PasswordCache};
 use ids::IdMapper;
-use metrics::{counter, gauge};
-use reload::{ConfigSource, FileConfigSource, ReloadContext, ReloadHub};
-use serde_json::Value;
+use reload::{ConfigSource, FileConfigSource, ReloadHub};
 use servers::{BackendManager, BackendSet, ServerRegistry, ServerState};
-use telemetry::names;
 use tls::{RustlsProvider, TlsProvider};
 use types::ServerId;
 use users::ProxyAuthenticator;
@@ -87,6 +86,8 @@ pub struct AppState {
     pub seeder: Arc<userdata::seed::Seeder>,
     /// Per-user parental rating limits.
     pub parental: Arc<parental::service::ParentalService>,
+    /// State the proxy owns itself (settings, preferences, playlists, ...).
+    pub local: local::Local,
     /// Copies of one series/season on several servers.
     pub siblings: Arc<siblings::SiblingTable>,
     pub sessions: Arc<auth::Sessions>,
@@ -99,8 +100,6 @@ pub struct AppState {
     pub tls_provider: Arc<dyn TlsProvider>,
     pub hub: ReloadHub,
     pub listener_tls: Arc<reload::ListenerTls>,
-    /// In-memory display preferences keyed by (user, id, client).
-    pub display_prefs: Mutex<HashMap<String, Value>>,
     pub generation: AtomicU64,
     pub started: Instant,
     pub last_reload: Mutex<Option<(String, Option<String>)>>,
@@ -179,7 +178,11 @@ impl AppState {
             groups.clone(),
             cfg.index.page_size,
         ));
+        let play_sessions = Arc::new(live::play_sessions::PlaySessions::default());
         let mut rewriters = opts.rewriters.unwrap_or_default();
+        rewriters.push(Box::new(rewrite::MeteredRewriter(
+            live::play_sessions::PlaySessionRecorder(play_sessions.clone()),
+        )));
         rewriters.push(Box::new(rewrite::MeteredRewriter(
             index::canonical::CanonicalIdRewriter::new(groups),
         )));
@@ -196,6 +199,8 @@ impl AppState {
         rewriters.push(Box::new(rewrite::MeteredRewriter(
             parental::filter::ParentalFilter::new(parental.clone()),
         )));
+        let live_sessions = Arc::new(live::LiveSessions::new());
+        let local = local::Local::new(store.clone(), play_sessions, live_sessions.clone());
         let seeder = Arc::new(userdata::seed::Seeder::new(store));
         let sessions = Arc::new(sessions);
         let auth = Arc::new(users::MeteredAuthenticator(
@@ -226,6 +231,7 @@ impl AppState {
         hub.subscribe(Arc::new(auth::SessionPruner {
             sessions: sessions.clone(),
             users: auth.clone(),
+            live: live_sessions,
         }));
         hub.subscribe(Arc::new(reload::LogFilter(opts.log.clone())));
         hub.subscribe(listener_tls.clone());
@@ -246,6 +252,7 @@ impl AppState {
             userdata,
             seeder,
             parental,
+            local,
             siblings: Arc::new(siblings),
             sessions,
             authenticator: auth,
@@ -258,7 +265,6 @@ impl AppState {
             tls_provider,
             hub,
             listener_tls,
-            display_prefs: Mutex::new(HashMap::new()),
             generation: AtomicU64::new(1),
             started: Instant::now(),
             last_reload: Mutex::new(None),
@@ -303,111 +309,6 @@ impl AppState {
 
     pub fn password_cache(&self) -> &PasswordCache {
         &self.password_cache
-    }
-
-    fn publish_config_gauges(&self) {
-        let cfg = self.cfg();
-        gauge!(names::CONFIG_GENERATION).set(self.generation.load(Ordering::Relaxed) as f64);
-        gauge!(names::CONFIG_LAST_RELOAD).set(telemetry::unix_now());
-        gauge!(names::CONFIG_UPSTREAMS)
-            .set(cfg.upstreams.iter().filter(|u| u.enabled).count() as f64);
-        gauge!(names::SERVERS_ACTIVE).set(self.backends.load().len() as f64);
-        gauge!(names::CONFIG_USERS).set(cfg.users.len() as f64);
-        if let Some(t) = &cfg.tls {
-            if let Some(exp) = self.tls_provider.cert_expiry(&t.cert_path) {
-                gauge!(names::TLS_CERT_EXPIRY, "cert" => "listener").set(exp as f64);
-            }
-        }
-    }
-
-    /// Log into all backends in the background (failures are only logged),
-    /// and start the catalog refresher if `cache.refresh_interval_secs > 0`
-    /// and the catalog index crawler.
-    pub fn spawn_initial_logins(self: &Shared) {
-        for u in self.backends().iter() {
-            let u = u.clone();
-            tokio::spawn(async move {
-                if let Err(e) = u.ensure_login().await {
-                    tracing::warn!(upstream = %u.name(), "initial login failed: {e}");
-                }
-            });
-        }
-        let weak = Arc::downgrade(self);
-        self.index.spawn(weak.clone());
-        let w = weak.clone();
-        tokio::spawn(async move {
-            loop {
-                let Some(st) = w.upgrade() else { return };
-                st.seeder.pass(&st).await;
-                drop(st);
-                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-            }
-        });
-        tokio::spawn(async move {
-            loop {
-                let secs = match weak.upgrade() {
-                    Some(st) => st.cfg().cache.refresh_interval_secs,
-                    None => return,
-                };
-                tokio::time::sleep(std::time::Duration::from_secs(secs.max(5))).await;
-                if secs == 0 {
-                    continue;
-                }
-                let Some(st) = weak.upgrade() else { return };
-                if st.cfg().cache.enabled {
-                    proxy::refresh_catalog(&st).await;
-                }
-            }
-        });
-    }
-
-    /// Re-load the config from its source and apply it through the reload
-    /// hub. On any error the running config is kept unchanged.
-    /// `files_changed` = referenced files (TLS) changed on disk.
-    #[tracing::instrument(skip(self))]
-    pub async fn reload(self: &Shared, files_changed: bool) -> anyhow::Result<bool> {
-        let _g = self.reload_lock.lock().await;
-        let r = self.reload_inner(files_changed).await;
-        let outcome = match &r {
-            Ok(true) => "success",
-            Ok(false) => "unchanged",
-            Err(_) => "error",
-        };
-        counter!(names::CONFIG_RELOADS, "outcome" => outcome).increment(1);
-        *self.last_reload.lock().unwrap() =
-            Some((dto::now_iso(), r.as_ref().err().map(|e| format!("{e:#}"))));
-        if let Err(e) = &r {
-            tracing::error!("config reload failed, keeping previous config: {e:#}");
-        }
-        r
-    }
-
-    async fn reload_inner(self: &Shared, files_changed: bool) -> anyhow::Result<bool> {
-        let Some(src) = self.source.clone() else {
-            anyhow::bail!("no config source to reload from");
-        };
-        // Hashing new passwords is CPU heavy; keep it off the async workers.
-        let st = self.clone();
-        let new = tokio::task::spawn_blocking(move || src.load(&st.password_cache)).await??;
-        let old = self.cfg();
-        if *old == new && !files_changed {
-            return Ok(false);
-        }
-        let cx = ReloadContext {
-            old: &old,
-            new: &new,
-            files_changed,
-            tls: self.tls_provider.as_ref(),
-        };
-        self.hub.run(&cx).await?;
-        *self.cfg.write().unwrap() = Arc::new(new);
-        self.generation.fetch_add(1, Ordering::Relaxed);
-        self.publish_config_gauges();
-        tracing::info!(
-            generation = self.generation.load(Ordering::Relaxed),
-            "config reloaded"
-        );
-        Ok(true)
     }
 }
 

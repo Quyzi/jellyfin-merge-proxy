@@ -49,7 +49,7 @@ client ─► axum router (telemetry middleware)
 | `PasswordHasher` / `PasswordVerifier` | `password` | `Argon2id`, `MeteredHasher<H>` | Proxy-user password hashing (argon2id) and verification. |
 | `ProxyAuthenticator` | `users` | `TomlAuthenticator<V>`, `MeteredAuthenticator<A>` | Proxy logins against `[[user]]` (also `Reloadable`). |
 | `IdMapper` | `ids` | `HashedIdTable` (persisted through an `IdStore`), `PersistentViews<M>` (merged views stored and reloaded), `MeteredIdMapper<M>`, `GroupedIdMapper<M>` (canonical ids: best live copy, per-server resolution) | Stable proxy ids `sha256("jmp1:"+server+":"+id)`, merged views. |
-| `IdStore` / `SiblingStore` / `SessionStore` / `IndexStore` / `UserDataStore` (`Store`) | `store` | `SqliteStore`, `MemoryStore` | Durable state: id mappings, series sibling links, sessions, crawled catalog per server, canonical ids, merged views, per-user item state and seed marks. Loaded at startup into the in-memory tables, which write new entries through. |
+| `IdStore` / `SiblingStore` / `SessionStore` / `IndexStore` / `UserDataStore` / `LocalStore` (`Store`) | `store` | `SqliteStore`, `MemoryStore` | Durable state: id mappings, series sibling links, sessions, crawled catalog per server, canonical ids, merged views, per-user item state and seed marks, and what the proxy owns itself (user settings, display preferences, playlists, see `local`). Loaded at startup into the in-memory tables, which write new entries through. |
 | `Crawler` | `index::crawl` | `ItemsCrawler` | Reads one server's whole catalog into index `Entry`s (paged `Items?ParentId=<library>&Recursive=true`) plus its parental rating scores. |
 | `GroupingPolicy` | `index::grouping` | `ProviderGrouping` | Which copies are the same item (provider ids, name + year; seasons/episodes of grouped series by number). |
 | `CopyRanker` | `index::rank` | `PriorityRanker`, `ResolutionRanker` | Best copy of a group (`[index] prefer`). |
@@ -62,8 +62,8 @@ client ─► axum router (telemetry middleware)
 | `ConfigWatcher` | `reload` | `PollingWatcher` (mtime + size of config + TLS files, default every 3 s), `SighupWatcher` | What triggers a reload; run via `reload::spawn_watcher`. |
 | `Reloadable` | `reload` | `BackendManager` (the server set; each `MediaBackend` applies its own in-place changes), `MeteredAuthenticator` (users), `SessionPruner`, `LogFilter`, `ListenerTls`, `CatalogCacheReload`, `UserDataService`, `ParentalService`, `RestartNotices` | Two-phase hot reload through `ReloadHub`: every subscriber validates, then every subscriber applies. A failed validation keeps the old config. |
 | `TlsProvider` | `tls` | `RustlsProvider` | Listener and upstream rustls configs, certificate expiry. |
-| `ResponseRewriter` | `rewrite`, `index::canonical` | `JsonIdRewriter`, `HlsPlaylistRewriter`, `LocationHeaderRewriter`, `CanonicalIdRewriter` (member ids → canonical ids, except `MediaSources`), `UserDataOverlay` (every `UserData` → the proxy user's), `ParentalFilter` (drops items over the proxy user's limit from list responses), `MeteredRewriter<R>` | Ordered `RewriteChain` applied to upstream responses (ids, playlist URLs, redirects). |
-| `Endpoint` | `endpoints` | `Route` (pattern + `Access` + handler fn) | Ordered `Registry`; modules `system`, `users`, `library`, `sessions`, `userdata`, `compat`, `fallback`. A handler may return `Flow::Next` to defer to the next match. |
+| `ResponseRewriter` | `rewrite`, `index::canonical` | `JsonIdRewriter`, `HlsPlaylistRewriter`, `LocationHeaderRewriter`, `CanonicalIdRewriter` (member ids → canonical ids, except `MediaSources`), `UserDataOverlay` (every `UserData` → the proxy user's), `ParentalFilter` (drops items over the proxy user's limit from list responses), `PlaySessionRecorder` (`PlaybackInfo` responses → which server owns the `PlaySessionId`), `MeteredRewriter<R>` | Ordered `RewriteChain` applied to upstream responses (ids, playlist URLs, redirects). |
+| `Endpoint` | `endpoints` | `Route` (pattern + `Access` + handler fn) | Ordered `Registry`; modules `system`, `users`, `library`, `sessions`, `remote`, `userdata`, `compat`, `fallback`. A handler may return `Flow::Next` to defer to the next match. |
 | `SecretCipher` | `secrets` | `XChaCha20Cipher` | Encrypts and decrypts upstream passwords and API keys with authenticated encryption (XChaCha20-Poly1305 AEAD). Encrypted values are prefixed `enc:v1:<base64>`. |
 | `KeyStore` | `secrets` | `DefaultKeyStore` | Manages the encryption key: reads from `JMP_SECRET_KEY` env var, or `/var/lib/jmp/secret.key` file, or auto-generates (with 0600 permissions) on first run. |
 
@@ -109,6 +109,26 @@ request: IndexQuery::parse (Err = unsupported ⇒ live fan-out) ─► run (filt
   instead (`outcome="unsupported"`, the reason is logged at debug).
 * Schema: migration `0002_index.sql` (`user_version` 2) adds
   `index_servers`, `index_entries`, `canonical_ids`, `merged_views`.
+
+## Proxy-owned state (`src/local/`, `src/live/`)
+
+`AppState::local` holds what the proxy answers itself instead of forwarding:
+
+* `settings` (`UserConfiguration` per proxy user, replaced whole like
+  `UserManager.UpdateConfigurationAsync`), `prefs` (`DisplayPreferences` per
+  user, preferences guid and client, Jellyfin's id derivation and `CustomPrefs`
+  rules) and `playlists` (owner, shares, open access, entries as canonical ids).
+  All three load from `LocalStore` at start and write through; schema:
+  migration `0004_local.sql` (`user_settings`, `display_prefs`, `playlists`).
+* `password` changes a proxy user's password: verify, write an argon2 hash into
+  the config file (`config_rewrite::set_user_password`), reload, revoke the
+  user's other sessions. `policy` builds the `UserPolicy` (parental limits are
+  reflected in it).
+* `live` (`LiveSessions`) is the in-memory session registry behind
+  `Sessions`, `/socket` and remote control between one user's clients;
+  `live::notify` turns `UserDataService` and `IndexService` broadcasts into
+  `UserDataChanged` / `LibraryChanged` pushes. `play_sessions` remembers which
+  upstream issued each `PlaySessionId`.
 
 ## Per-user state (`src/userdata/`)
 

@@ -126,6 +126,24 @@ impl Sessions {
         self.persist(|st| st.remove_sessions(&[token.to_string()]));
     }
 
+    /// Remove (and write through the removal of) every session `f` matches;
+    /// the removed sessions are returned.
+    pub fn remove_where(&self, f: impl Fn(&Session) -> bool) -> Vec<Session> {
+        let mut removed = Vec::new();
+        self.map.write().unwrap().retain(|_, s| {
+            let hit = f(s);
+            if hit {
+                removed.push(s.clone());
+            }
+            !hit
+        });
+        if !removed.is_empty() {
+            let tokens: Vec<String> = removed.iter().map(|s| s.token.clone()).collect();
+            self.persist(|st| st.remove_sessions(&tokens));
+        }
+        removed
+    }
+
     /// Drop sessions whose user no longer exists in the config.
     pub fn retain_users(&self, valid_ids: &[String]) {
         let mut removed = Vec::new();
@@ -216,6 +234,7 @@ pub fn new_token() -> String {
 pub struct SessionPruner {
     pub sessions: std::sync::Arc<Sessions>,
     pub users: std::sync::Arc<dyn crate::users::ProxyAuthenticator>,
+    pub live: std::sync::Arc<crate::live::LiveSessions>,
 }
 
 #[async_trait::async_trait]
@@ -232,6 +251,7 @@ impl crate::reload::Reloadable for SessionPruner {
         }
         let before = self.sessions.len();
         self.sessions.retain_users(&self.users.ids());
+        self.live.retain_tokens(&self.sessions);
         Ok(self.sessions.len() != before)
     }
 }

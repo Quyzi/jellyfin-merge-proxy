@@ -18,7 +18,7 @@ use crate::types::{ServerId, UpstreamItemId};
 use crate::Shared;
 use anyhow::Result;
 use axum::body::{Body, Bytes};
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -225,7 +225,15 @@ pub fn classify(st: &Shared, seg: &str) -> String {
 pub fn authenticate(st: &Shared, r: &Req, classified: &[&str]) -> Option<Client> {
     let _s = Stage::start("auth");
     let is_get = r.method == Method::GET || r.method == Method::HEAD;
-    let anonymous_ok = is_get && classified.contains(&"images");
+    // `Items/{id}/Images` (the image-info list) needs a token like Jellyfin's
+    // [Authorize]; the image binaries below it stay anonymous.
+    let anonymous_ok = is_get
+        && (classified
+            .iter()
+            .position(|s| *s == "images")
+            .is_some_and(|i| i + 1 < classified.len())
+            || classified.first() == Some(&"userimage")
+            || classified == ["branding", "splashscreen"]);
     let info = auth::client_auth(&r.headers, &r.query);
     let token = info.get("token");
     let session = token.and_then(|t| st.sessions.get(t));
@@ -237,6 +245,9 @@ pub fn authenticate(st: &Shared, r: &Req, classified: &[&str]) -> Option<Client>
         (None, None) => "missing",
     };
     counter!(names::TOKEN_VALIDATIONS, "outcome" => outcome).increment(1);
+    if let Some(s) = &session {
+        st.local.live.touch(s);
+    }
     match session {
         Some(s) => Some(Client {
             token: s.token.clone(),
@@ -256,13 +267,20 @@ pub fn anon_client(st: &Shared) -> Client {
     }
 }
 
-pub fn current_user(st: &Shared, c: &Client) -> Value {
+pub fn current_user(st: &Shared, user_id: &str) -> Value {
     let name = st
         .authenticator
-        .by_id(&c.user_id)
+        .by_id(user_id)
         .map(|u| u.name)
         .unwrap_or_default();
-    dto::user_dto(&name, &c.user_id, &st.server_id, &st.cfg().proxy.name)
+    dto::user_dto(
+        &name,
+        user_id,
+        &st.server_id,
+        &st.cfg().proxy.name,
+        st.local.settings.get(user_id),
+        crate::local::policy(st, user_id),
+    )
 }
 
 #[tracing::instrument(level = "debug", skip_all)]
@@ -318,32 +336,26 @@ pub async fn login(st: &Shared, r: &Req) -> Response {
         created: dto::now_iso(),
     };
     tracing::info!(user = %s.user_name, client = %s.client, device = %s.device_name, "user logged in");
-    st.sessions.insert(s.clone());
-    let user_dto = dto::user_dto(&user.name, &user.id, &st.server_id, &st.cfg().proxy.name);
-    ok_json(dto::auth_result(user_dto, &s, &st.server_id))
-}
-
-pub fn display_prefs(st: &Shared, r: &Req, c: &Client) -> Response {
-    let id = r.segs[1].clone();
-    let client = q_get(&r.query, "client").unwrap_or("emby").to_string();
-    let key = format!("{}|{}|{}", c.user_id, id, client);
-    if r.method == Method::POST {
-        if let Ok(v) = serde_json::from_slice::<Value>(&r.body) {
-            st.display_prefs.lock().unwrap().insert(key, v);
-        }
-        return no_content();
+    // Jellyfin logs the same user out of this device before issuing a token.
+    for old in st
+        .sessions
+        .remove_where(|x| x.user_id == user.id && x.device_id == s.device_id)
+    {
+        st.local.live.remove(&old.session_id);
     }
-    let v = st
-        .display_prefs
-        .lock()
-        .unwrap()
-        .get(&key)
-        .cloned()
-        .unwrap_or_else(|| dto::display_prefs(&id, &client));
-    ok_json(v)
+    st.sessions.insert(s.clone());
+    st.local.live.touch(&s);
+    let info = st
+        .local
+        .live
+        .dto_of(&s.session_id, &st.server_id)
+        .unwrap_or_default();
+    let user_dto = current_user(st, &user.id);
+    ok_json(dto::auth_result(user_dto, info, &s.token, &st.server_id))
 }
 
 mod admin;
+mod client_fields;
 mod context;
 mod fan;
 mod fetch;
@@ -353,20 +365,29 @@ mod indexed_counts;
 mod indexed_names;
 mod indexed_user;
 mod list;
+mod merged;
+mod playlists;
 mod siblings;
+mod specs;
 mod views;
 mod ws;
 
 use admin::*;
 use context::*;
+pub(crate) use context::{in_ctx, out_ctx, path_with_query};
 pub use fan::*;
+pub(crate) use fetch::fetch_dtos;
 pub use forward::*;
 pub use indexed::*;
 pub use indexed_counts::*;
 pub use indexed_names::*;
 pub use indexed_user::*;
+pub(crate) use list::upstream_json;
 pub use list::*;
+pub use merged::*;
+pub use playlists::*;
 pub use siblings::*;
+pub use specs::*;
 pub use views::*;
 use ws::*;
 

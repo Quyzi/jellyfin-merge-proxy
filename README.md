@@ -631,23 +631,35 @@ Answered by the proxy itself:
 |---|---|
 | `GET /System/Info/Public`, `/System/Info`, `/System/Ping`, `/System/Endpoint` | proxy identity (`[proxy].name`, id, `reported_version`) |
 | `GET /Branding/Configuration`, `/Branding/Css` | empty branding |
-| `GET /QuickConnect/Enabled` | `false` |
+| `GET /QuickConnect/Enabled` | `false`; `/QuickConnect/Initiate`, `/Connect`, `/Authorize` answer 401 `Quick connect is disabled` |
 | `GET /Users/Public` | `[]` |
 | `POST /Users/AuthenticateByName` | checks `[[user]]`, returns a full `AuthenticationResult` (User, SessionInfo, AccessToken, ServerId) |
 | `GET /Users/Me`, `/Users/{id}`, `/Users` | proxy user DTO |
-| `GET /UserViews`, `/Users/{u}/Views` | merged libraries |
+| `GET /UserViews`, `/Users/{u}/Views` | merged libraries, ordered by the user's `OrderedViews` then name; live TV only with `includeExternalContent` (default true), libraries in `MyMediaExcludes` only with `includeHidden`; a "Playlists" library when the user has proxy playlists and no upstream has one; a merged library's `RecursiveItemCount` counts the distinct visible, non-virtual items (once the index is built) |
 | `GET /Items/{view}`, `/Users/{u}/Items/{view}`, view images | merged view DTO / primary image of a member library |
 | `GET /Items`, `/Users/{u}/Items` | fan-out (or routed to the owning upstream for `ParentId`), merge, dedupe, sort, page |
-| `GET /Items/Latest`, `/Search/Hints`, `/Artists`, `/MusicGenres`, ... | fan-out lists |
+| `GET /Items/Latest`, `/Search/Hints`, `/Artists`, `/MusicGenres`, ... | fan-out lists (`Latest` defaults to `Limit=20` like Jellyfin; `NextUp` without the index keeps one episode per series). While every upstream is down, lists, `Items/Counts` and filters answer 503 instead of an empty library |
 | `GET /UserItems/Resume`, `/Shows/NextUp` | from the index and per-user state (`[userdata]`); fan-out while the index is cold or `[userdata]` is off |
 | `POST/DELETE /UserPlayedItems/{id}`, `/UserFavoriteItems/{id}`, `/UserItems/{id}/Rating`; `GET/POST /UserItems/{id}/UserData` (and `/Users/{u}/...` forms) | per-user state, written through to every copy (`[userdata]`); forwarded to the owner when off |
 | `GET /Shows/{id}/Seasons`, `/Shows/{id}/Episodes` | for a series that is on several servers (with `dedupe`): fan-out to every copy, seasons merged by number, episodes by season+episode number (priority winner kept); otherwise routed to the owner |
 | `GET /Genres`, `/Studios`, `/Persons` | from the index: names merged across servers, exact totals and paging; each DTO is the upstream's own (images, `UserData`) fetched from one member server, with Jellyfin's per-type counts when `IncludeItemTypes` is sent; fan-out while the index is cold |
+| `GET /Genres/{name}`, `/Studios/{name}`, `/Persons/{name}`, `/MusicGenres/{name}`, `/Artists/{name}` (and `/Images/*`) | forwarded to a server that has the name: from the index when warm, else the live servers are probed in order (`Persons/{name}`, or an `Items` filter for the others, never the name route itself) |
+| `GET /Movies/Recommendations` | fan-out; categories with the same type and baseline merged, items unioned, ordered by type, capped by `categoryLimit`/`itemLimit` |
+| `GET /Items/Suggestions`, `/Users/{u}/Suggestions` | fan-out, random order; the total is the page size unless `EnableTotalRecordCount=true` |
+| `GET /LiveTv/Channels`, `/Programs`, `/Programs/Recommended`, `/Recordings`, `/Recordings/Folders`, `/Timers`, `/SeriesTimers`; `POST /LiveTv/Programs`; `GET /LiveTv/Info`, `/GuideInfo` | fan-out and merge (programs by start date; the programs query only goes to servers that own the requested `ChannelIds`) |
+| `DELETE /LiveTv/Recordings/{id}`, `/LiveTv/Timers*`, `/LiveTv/SeriesTimers*` writes; tuner, tuner-host, listing-provider and channel-mapping administration | empty 403, as for a non-administrator |
+| `DELETE /Videos/ActiveEncodings`, `POST /Sessions/Playing/Ping` | sent to the server whose `PlaybackInfo` issued the `PlaySessionId` (all servers for an unknown one on `ActiveEncodings`; the proxy remembers owners for 24 h, in memory) |
 | `GET /Years` | fan-out, merged by name |
+| `POST /Playlists`, `/Playlists/{id}`, `/Playlists/{id}/Items`, `/Playlists/{id}/Items/{entry}/Move/{n}`, `/Playlists/{id}/Users/{u}`; `GET /Playlists/{id}`, `/Items`, `/Users[/{u}]`; `DELETE /Playlists/{id}/Items`, `/Users/{u}`, `/Items/{id}` | playlists owned by the proxy user (Jellyfin's sharing rules), stored in `jmp.db`, entries may come from any server; `GET /Items?IncludeItemTypes=Playlist` and the Playlists library list them next to the upstream playlists. A playlist id that is not a proxy playlist is forwarded to its server as before |
 | `GET /Items/Filters`, `/Items/Filters2` | from the index (genres, tags, ratings, years); `Filters2` keys the index does not keep (audio/subtitle languages) are unioned from the live servers |
 | `GET /Items/Counts` | per-type counts from the index (merged copies counted once); `ItemCount` is the servers' sum less the merged copies |
-| `GET/POST /Sessions*`, `/Sessions/Playing/Ping`, `/DisplayPreferences/{id}`, `/SyncPlay/*`, `/Plugins`, ... | local stubs |
-| `/socket` | WebSocket keep-alive only |
+| `GET/POST /Sessions*`, ... | local stubs |
+| `GET/POST /DisplayPreferences/{id}?client=` | proxy-owned, persisted per user and client in the proxy's database (Jellyfin's id derivation, defaults and `CustomPrefs` rules) |
+| `GET /Users`, `/Users/{id}`; `POST /Users/Configuration`, `/Users/{id}/Configuration` | the proxy users; configuration is proxy-owned and persisted (own user only) |
+| `POST /Users/Password` | verifies the current password, writes a new argon2 hash into the config file, reloads and revokes the user's other sessions (needs a config file; `ResetPassword` is refused) |
+| `POST /Users/{id}/Policy`, `/SyncPlay/*`, `/Plugins`, `/Packages`, `/Repositories`, `/ScheduledTasks` | `403`, as for a non-admin user |
+| `GET /Sessions`, `POST /Sessions/Capabilities[/Full]`, `/Sessions/Viewing`, `/Sessions/{id}/{Playing,Playing/*,System/*,Command[/*],Message,Viewing,User/*}` | JMP's own session registry and remote control between one user's clients |
+| `/socket` | WebSocket: keep-alive, `Sessions` push, and JMP-generated `UserDataChanged` / `LibraryChanged` |
 
 Routed to the owning upstream by the proxy id in the path/query/body:
 `/Items/{id}`, `/Users/{u}/Items/{id}`, `/Shows/{id}/Seasons|Episodes` (single-server series),
@@ -821,7 +833,17 @@ users) in CI against two fake upstreams.
   but no aggregated folder counts. `Latest` is fan-out and hides items by the
   upstream account's played state. `NextUp`'s `EnableRewatching` is ignored.
 * **Playback reports for items outside the index** (unknown runtime) keep
-  the position but never mark the item played on stop.
+  the position but never mark the item played on stop. Indexed items follow
+  Jellyfin's `UpdatePlayState` rules (media-type support, resumable types,
+  audiobook minutes, `Failed` stops ignored).
+* **Playlists** created through the proxy are the proxy's, per proxy user.
+  Upstream playlists stay on their server: a client sees both, but adding
+  to or editing an upstream playlist only works for items of that server.
+* **Virtual ("missing") episodes** are hidden unless the user turns on
+  `DisplayMissingEpisodes` and are ignored for NextUp and played counts.
+* **Search** matches names the way Jellyfin does (accents and case folded,
+  `OriginalTitle` too) and orders results by relevance; the diacritics table
+  covers common Latin letters and may differ from Jellyfin's for rarer ones.
 * **Index freshness:** items added upstream appear after the next crawl
   (`[index] refresh_interval_secs`, default 10 min); until then they are
   only visible through fan-out endpoints. While a live server has never been
@@ -835,10 +857,14 @@ users) in CI against two fake upstreams.
   studios, seasons not at all), which may differ for music or mixed
   libraries. `Items/Filters` without a `ParentId` returns the whole merged
   library (Jellyfin returns empty lists).
-* **WebSocket** only answers keep-alives; no remote control, no server-pushed
-  library/playstate updates.
-* **No** SyncPlay, Live TV, admin dashboard, user management, Quick Connect,
-  or LAN discovery. `/web` is forwarded to the primary upstream's web client;
+* **WebSocket** pushes only what the proxy itself generates (`Sessions`,
+  `UserDataChanged`, `LibraryChanged`, remote-control commands). Upstream
+  servers' own pushes are not relayed, and remote control only reaches the
+  caller's own sessions.
+* **No** SyncPlay, Live TV management (tuners, timers, recording deletion;
+  read-only Live TV is merged), admin dashboard, user management, Quick
+  Connect, or LAN discovery. Plugin, package, repository and scheduled-task
+  endpoints answer 403 as for a non-administrator. `/web` is forwarded to the primary upstream's web client;
   its index and bundles load through the proxy, but using it interactively
   has not been tested.
 * **Transcoding** happens on the owning upstream with its settings; the proxy

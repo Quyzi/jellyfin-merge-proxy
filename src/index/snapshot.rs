@@ -304,6 +304,11 @@ impl Snapshot {
         self.by_id.get(id).copied()
     }
 
+    /// Every canonical item id with its item index.
+    pub fn ids(&self) -> impl Iterator<Item = (&ProxyItemId, usize)> {
+        self.items.iter().enumerate().map(|(i, it)| (&it.id, i))
+    }
+
     /// The copy used for an item's metadata (its best copy).
     pub fn primary(&self, item: &Item) -> &Entry {
         &self.copies[item.copies[0]].entry
@@ -320,6 +325,18 @@ impl Snapshot {
     /// Episodes (item indexes) of a series or season, in index order.
     pub fn episodes_of(&self, idx: usize) -> &[usize] {
         self.episodes.get(&idx).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// Jellyfin's `IsVirtualItem`-style "missing" test: a `Virtual`
+    /// location. A season is virtual only when all its episodes are
+    /// (`SeasonMetadataService`); folderless seasons carry no path yet are
+    /// not virtual.
+    pub fn is_virtual(&self, idx: usize) -> bool {
+        let e = self.primary(&self.items[idx]);
+        if e.location_type.as_deref() != Some("Virtual") {
+            return false;
+        }
+        !e.is("Season") || self.episodes_of(idx).iter().all(|i| self.is_virtual(*i))
     }
 
     pub fn len(&self) -> usize {

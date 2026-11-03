@@ -1,6 +1,7 @@
 //! Durable proxy state: id mappings, series sibling links, sessions, the
-//! catalog index ([`IndexStore`]) and per-user watch state
-//! ([`UserDataStore`]).
+//! catalog index ([`IndexStore`]), per-user watch state
+//! ([`UserDataStore`]) and the state the proxy owns itself ([`LocalStore`]:
+//! user settings, display preferences, playlists).
 //!
 //! The in-memory tables ([`crate::ids::HashedIdTable`],
 //! [`crate::siblings::SiblingTable`], [`crate::auth::Sessions`]) stay the
@@ -18,14 +19,17 @@ use std::sync::Arc;
 
 pub mod import;
 pub mod index;
+pub mod local;
 mod memory;
 pub mod migrations;
 mod sqlite;
 mod sqlite_index;
+mod sqlite_local;
 mod sqlite_userdata;
 pub mod userdata;
 
 pub use index::{IndexStore, StoredServerIndex, StoredView};
+pub use local::LocalStore;
 pub use memory::MemoryStore;
 pub use sqlite::{apply_journal_mode, publish_journal_mode, SqliteStore};
 pub use userdata::{UserDataRow, UserDataStore};
@@ -96,7 +100,9 @@ impl ImportBatch {
 }
 
 /// All proxy state behind one handle.
-pub trait Store: IdStore + SiblingStore + SessionStore + IndexStore + UserDataStore {
+pub trait Store:
+    IdStore + SiblingStore + SessionStore + IndexStore + UserDataStore + LocalStore
+{
     /// Short name for logs ("sqlite", "memory").
     fn kind(&self) -> &'static str;
 

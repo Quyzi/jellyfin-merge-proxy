@@ -30,9 +30,14 @@ pub trait ConfigSource: Send + Sync {
     fn watched_paths(&self, cfg: &Config) -> Vec<PathBuf> {
         cfg.watched_files()
     }
+    /// The writable config file behind this source, if there is one.
+    fn path(&self) -> Option<&Path> {
+        None
+    }
 }
 
-/// The TOML file on disk (read-only; the proxy never rewrites it).
+/// The TOML file on disk (the proxy rewrites it only to hash/encrypt secrets
+/// and to store a changed proxy-user password).
 #[derive(Debug, Clone)]
 pub struct FileConfigSource {
     pub path: PathBuf,
@@ -50,6 +55,9 @@ impl ConfigSource for FileConfigSource {
     }
     fn load(&self, cache: &PasswordCache) -> Result<Config, ConfigError> {
         Config::load(&self.path, cache)
+    }
+    fn path(&self) -> Option<&Path> {
+        Some(&self.path)
     }
     fn watched_paths(&self, cfg: &Config) -> Vec<PathBuf> {
         let mut v = vec![self.path.clone()];
