@@ -1,3 +1,5 @@
+![jellyfin-merge-proxy: a jellyfish pulling many streams into one](docs/images/banner.jpg)
+
 # jellyfin-merge-proxy
 
 One Jellyfin server made of many.
