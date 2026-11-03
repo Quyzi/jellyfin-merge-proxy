@@ -143,3 +143,25 @@ async fn new_server_goes_cold_and_down_servers_are_skipped() {
     // b is down: it is skipped and not crawled.
     assert_eq!(svc.crawled_servers().len(), 1);
 }
+
+/// Every server unreachable since start: nothing was crawled, so no snapshot
+/// may be published (an empty one would read as a built index and let
+/// parental checks pass items they cannot rate).
+#[tokio::test]
+async fn nothing_crawled_publishes_no_snapshot() {
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+    let (reg, mocks, set, ids) = setup();
+    let cfg = config(true);
+    let svc = IndexService::with_crawler(
+        store,
+        reg,
+        Arc::new(CanonicalGroups::new()),
+        Box::new(FakeCrawler),
+    );
+    for m in &mocks {
+        m.set_down(true);
+    }
+    svc.crawl_all(&set).await;
+    svc.rebuild(&cfg, &set, &ids);
+    assert!(svc.latest().is_none());
+}

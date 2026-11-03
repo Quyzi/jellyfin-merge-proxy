@@ -89,6 +89,14 @@ pub(super) fn validate_accounts(cfg: &Config) -> Result<(), String> {
                 return Err(format!("user '{}': empty max_parental_rating", u.name));
             }
         }
+        // Limits are judged against the catalog index; without it every
+        // item of a restricted user would stay blocked.
+        if (u.max_parental_rating.is_some() || u.block_unrated) && !cfg.index.enabled {
+            return Err(format!(
+                "user '{}': max_parental_rating / block_unrated need [index] enabled = true",
+                u.name
+            ));
+        }
     }
     Ok(())
 }

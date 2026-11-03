@@ -70,6 +70,7 @@ password = { plain = "also-change-me" }
 #                        MaxParentalRating: a score (13) or a rating name
 #                        ("PG-13", resolved with the servers' rating tables)
 #   block_unrated        with a limit set, also hide unrated items
+#   (both need [index] enabled = true, the default)
 #
 #   [[user.account]]     act as this upstream account on one server instead
 #                        of the server's shared account: requests, playback

@@ -99,7 +99,7 @@ cp config.example.toml jmp.toml
 $EDITOR jmp.toml                 # add [[user]] and [[server]] entries
 mkdir -p data
 sudo chown 65532:65532 jmp.toml data   # the image runs as uid 65532 by default
-docker compose up -d
+docker compose up -d --build
 docker compose logs -f
 ```
 
@@ -251,8 +251,10 @@ shown when its rating score is at most the limit, and unrated videos, series
 and collections are hidden only with `block_unrated`. Episodes and seasons
 inherit their series' rating. Rating names are resolved through the servers'
 rating tables, collected by the crawl. Limits **fail closed**: an unknown
-rating name allows only score 0, and before the first index build a
-restricted user sees no individual items and no rated videos in lists.
+rating name allows only score 0, and until the first crawl of at least one
+server a restricted user sees no individual items and no rated videos in
+lists. Limits are judged against the index, so a config that sets one with
+`[index] enabled = false` is rejected.
 Blocked items are left out of lists with exact totals, return 404 when asked
 for directly, and are kept out of NextUp, Resume, search, playlists and
 remote play commands. Images stay reachable, as in Jellyfin.
@@ -383,8 +385,8 @@ route templates and server names, never ids or tokens. The full list is in
 [METRICS.md](METRICS.md), generated from `src/telemetry.rs`.
 
 **Grafana and Prometheus** come with `docker compose up` (copy `.env.example`
-to `.env` and set `GRAFANA_ADMIN_PASSWORD`). The provisioned dashboard has 55
-panels covering upstream health over time, latency heatmaps, per-server
+to `.env` and set `GRAFANA_ADMIN_PASSWORD`). The provisioned dashboard has 68
+panels in 12 rows, covering upstream health over time, latency heatmaps, per-server
 gauges, pipeline stages, streaming, dedupe, cache, auth and certificate
 expiry, with reload annotations. Alert rules in `deploy/prometheus/alerts.yml`
 cover a missing scrape, upstreams down, 5xx ratio, slow upstreams, expiring
@@ -487,8 +489,8 @@ part of `cargo test`. Bugs it finds get regression tests in
 **Releasing.** Bump the version in `Cargo.toml`, commit, and push a
 `release/vX.Y.Z` tag. The release workflow checks the tag against the
 version, runs fmt, clippy and tests, builds the tarballs, `.deb` and `.rpm`
-packages for both architectures, pushes signed multi-arch images with SBOM
-and provenance to GHCR, and publishes a GitHub release. Versions containing
+packages for both architectures, pushes multi-arch images with SBOM and
+provenance to GHCR, and publishes a GitHub release. Versions containing
 `-rc`, `-alpha` or `-beta` are marked as prereleases.
 
 Dependabot proposes weekly updates for Cargo, GitHub Actions and the base

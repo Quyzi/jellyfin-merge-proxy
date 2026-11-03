@@ -180,6 +180,12 @@ impl IndexService {
                 }))
             })
             .collect();
+        if servers.is_empty() {
+            // Nothing crawled yet (or every server unreachable since start):
+            // an empty snapshot would look like a built index and let
+            // parental checks pass unknown items.
+            return;
+        }
         let ranks: HashMap<ServerId, ServerRank> = set
             .iter()
             .enumerate()

@@ -292,4 +292,9 @@ api_key = "k"
         "account = [{ server = \"x\", api_key = \"k2\" }, { server = \"x\", api_key = \"k3\" }]",
     );
     assert!(Config::parse(&dup, &cache).is_err());
+    // Limits are judged by the index: a limit with the index off would keep
+    // every item of that user blocked, so the config is refused.
+    let no_index = format!("{text}[index]\nenabled = false\n");
+    let e = Config::parse(&no_index, &cache).unwrap_err().to_string();
+    assert!(e.contains("[index] enabled"), "{e}");
 }

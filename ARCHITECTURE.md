@@ -181,7 +181,10 @@ Seeder: user with an account imports from it (mark "server#account"), others sha
 * An item's score is its own rating's, else its series'; names are
   resolved through the union of the servers' `Localization/ParentalRatings`
   (lowercased). Unknown limit names, or no index yet, fail closed (score 0);
-  without rating tables, rated videos in fan-out pages are hidden.
+  without rating tables, rated videos in fan-out pages are hidden and
+  `blocks` refuses every item. A snapshot is only published once at least
+  one server has been crawled, and `Config::validate` rejects limits when
+  `[index] enabled = false` (the index would never exist).
 * Account secrets are decrypted with the `[[server]]` cipher and rewritten
   as `enc:v1:` by `config_rewrite::rewrite_user_accounts`. Tokens are only
   sent as headers; `AccountLogin`'s `Debug` redacts them; logs name the
