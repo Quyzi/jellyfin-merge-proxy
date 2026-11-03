@@ -60,7 +60,7 @@ argon2 = "0.6"
 
 # Metrics
 metrics = "0.24"
-metrics-exporter-prometheus = { version = "0.17", default-features = false }
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
 metrics-process = "2"
 unicode-normalization = "0.1"
 
