@@ -256,6 +256,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4.3.0
         with:
+          pattern: '{binary-*,package-*}'
           path: artifacts
           merge-multiple: true
 
@@ -284,8 +285,8 @@ jobs:
             echo ""
             echo "### Debian/Ubuntu"
             echo '```bash'
-            echo "wget https://github.com/${{ github.repository }}/releases/download/release/v${VERSION}/jellyfin-merge-proxy_${VERSION}_amd64.deb"
-            echo "sudo dpkg -i jellyfin-merge-proxy_${VERSION}_amd64.deb"
+            echo "wget https://github.com/${{ github.repository }}/releases/download/release/v${VERSION}/jellyfin-merge-proxy_${VERSION}-1_amd64.deb"
+            echo "sudo dpkg -i jellyfin-merge-proxy_${VERSION}-1_amd64.deb"
             echo '```'
             echo ""
             echo "### RHEL/Fedora"
