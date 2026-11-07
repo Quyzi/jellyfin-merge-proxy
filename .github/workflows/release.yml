@@ -89,10 +89,8 @@ jobs:
             arch: arm64
           - target: x86_64-unknown-linux-musl
             arch: amd64
-            suffix: -musl
           - target: aarch64-unknown-linux-musl
             arch: arm64
-            suffix: -musl
     steps:
       - name: Checkout
         uses: actions/checkout@v4.2.2
@@ -110,8 +108,7 @@ jobs:
         run: |
           VERSION="${{ needs.validate.outputs.version }}"
           TARGET="${{ matrix.target }}"
-          SUFFIX="${{ matrix.suffix }}"
-          ARCHIVE="jellyfin-merge-proxy-${VERSION}-${TARGET}${SUFFIX}.tar.gz"
+          ARCHIVE="jellyfin-merge-proxy-${VERSION}-${TARGET}.tar.gz"
           
           mkdir -p dist
           cd target/$TARGET/release
@@ -126,7 +123,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4.5.0
         with:
-          name: binary-${{ matrix.target }}${{ matrix.suffix }}
+          name: binary-${{ matrix.target }}
           path: dist/*
           retention-days: 1
 
@@ -264,6 +261,7 @@ jobs:
         id: notes
         run: |
           VERSION="${{ needs.validate.outputs.version }}"
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           
           {
@@ -280,7 +278,7 @@ jobs:
             echo ""
             echo "### Docker"
             echo '```bash'
-            echo "docker pull ghcr.io/${{ github.repository_owner }}/jellyfin-merge-proxy:${VERSION}"
+            echo "docker pull ghcr.io/${OWNER}/jellyfin-merge-proxy:${VERSION}"
             echo '```'
             echo ""
             echo "### Debian/Ubuntu"
