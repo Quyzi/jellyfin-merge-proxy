@@ -92,6 +92,18 @@ fn seg_template(seg: &str) -> String {
     }
 }
 
+/// HTTP status class label (`2xx` … `5xx`); bounded for aggregations.
+pub fn status_class(code: u16) -> &'static str {
+    match code {
+        100..=199 => "1xx",
+        200..=299 => "2xx",
+        300..=399 => "3xx",
+        400..=499 => "4xx",
+        500..=599 => "5xx",
+        _ => "other",
+    }
+}
+
 /// Bounded route template for metrics labels, e.g. `/items/{id}/images/primary`.
 pub fn route_template(path: &str) -> String {
     let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -186,11 +198,20 @@ pub async fn http_layer(mut req: Request, next: Next) -> Response {
     let start = Instant::now();
     let mut resp = next.run(req).await;
     g.decrement(1.0);
-    let status = resp.status().as_u16().to_string();
+    let code = resp.status().as_u16();
+    let status = code.to_string();
+    let class = status_class(code);
     histogram!(HTTP_DURATION, "route" => route.clone(), "method" => method.clone())
         .record(start.elapsed().as_secs_f64());
-    counter!(HTTP_REQUESTS, "route" => route.clone(), "method" => method, "status" => status)
-        .increment(1);
+    // Labels stay bounded: route templates, HTTP methods, and ~40 status codes.
+    counter!(
+        HTTP_REQUESTS,
+        "route" => route.clone(),
+        "method" => method,
+        "status" => status,
+        "status_class" => class
+    )
+    .increment(1);
     if let Some(len) = resp
         .headers()
         .get(axum::http::header::CONTENT_LENGTH)

@@ -1,5 +1,5 @@
 //! Per-proxy-user settings inside `[[user]]`: upstream accounts
-//! (`[[user.account]]`) and the parental rating limit.
+//! (`[[user.account]]`), parental rating limit, session cap, geo allowlist.
 
 use super::*;
 
@@ -99,4 +99,26 @@ pub(super) fn validate_accounts(cfg: &Config) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Uppercase ISO 3166-1 alpha-2 codes; rejects empties and duplicates.
+pub(super) fn normalize_countries(user: &str, raw: &[String]) -> Result<Vec<String>, ConfigError> {
+    let mut out = Vec::with_capacity(raw.len());
+    let mut seen = std::collections::HashSet::new();
+    for c in raw {
+        let t = c.trim();
+        if t.len() != 2 || !t.is_ascii() || !t.bytes().all(|b| b.is_ascii_alphabetic()) {
+            return Err(ConfigError::Invalid(format!(
+                "user '{user}': allowed_countries entry '{c}' must be an ISO 3166-1 alpha-2 code"
+            )));
+        }
+        let u = t.to_ascii_uppercase();
+        if !seen.insert(u.clone()) {
+            return Err(ConfigError::Invalid(format!(
+                "user '{user}': duplicate allowed_countries entry '{u}'"
+            )));
+        }
+        out.push(u);
+    }
+    Ok(out)
 }

@@ -256,6 +256,10 @@ async fn tv_flow_login_views_items_stream_playstate_metrics() {
         "route templates are used as labels"
     );
     assert!(
+        m.contains(r#"status="200""#) && m.contains(r#"status_class="2xx""#),
+        "http requests record status + status_class: {m}"
+    );
+    assert!(
         !m.contains(&token) && !m.contains("tokenA") && !m.contains(&bravo),
         "no secrets or ids in metrics"
     );

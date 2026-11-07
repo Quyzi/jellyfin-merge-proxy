@@ -1,6 +1,7 @@
 //! Loading and validating a [`Config`] from TOML.
 
 use super::*;
+use std::path::Path;
 
 impl Config {
     pub fn load(path: &Path, cache: &PasswordCache) -> Result<Config, ConfigError> {
@@ -99,6 +100,8 @@ impl Config {
                 accounts,
                 max_parental_rating: u.max_parental_rating.clone(),
                 block_unrated: u.block_unrated,
+                max_active_sessions: u.max_active_sessions,
+                allowed_countries: normalize_countries(&u.name, &u.allowed_countries)?,
             });
         }
 
@@ -135,6 +138,7 @@ impl Config {
             database: raw.database.clone(),
             index: raw.index.clone(),
             userdata: raw.userdata.clone(),
+            geo: raw.geo.clone(),
             logging: raw.logging.clone(),
             metrics: raw.metrics.clone(),
             debug: raw.debug.clone(),
@@ -182,6 +186,9 @@ impl Config {
             })?;
         }
         accounts::validate_accounts(self).map_err(ConfigError::Invalid)?;
+        self.geo
+            .validate(self.users.iter().any(|u| !u.allowed_countries.is_empty()))
+            .map_err(ConfigError::Invalid)?;
         if let Some(id) = &self.proxy.id {
             if crate::ids::normalize_hex_id(id).is_none() {
                 return bad("proxy.id must be 32 hex characters".into());

@@ -74,6 +74,15 @@ password = { plain = "also-change-me" }
 #   block_unrated        with a limit set, also hide unrated items
 #   (both need [index] enabled = true, the default)
 #
+#   max_active_sessions  cap on concurrent client logins (Jellyfin's
+#                        MaxActiveSessions). 0 / omit = unlimited. A new
+#                        login from a new DeviceId is refused when at the
+#                        cap; the same DeviceId still replaces itself.
+#
+#   allowed_countries    ISO 3166-1 alpha-2 allowlist (e.g. ["US", "CA"]).
+#                        Empty / omit = any country. Requires [geo]
+#                        country_header. Missing/unknown country fails closed.
+#
 #   [[user.account]]     act as this upstream account on one server instead
 #                        of the server's shared account: requests, playback
 #                        reports and the one-time watch-state import then use
@@ -86,10 +95,21 @@ password = { plain = "also-change-me" }
 # name = "kids"
 # password = "change-me-too"
 # max_parental_rating = "PG"
+# max_active_sessions = 2
+# allowed_countries = ["US", "CA"]
 # [[user.account]]
 # server = "gummybear"
 # user = "kids"
 # password = "kids-upstream-password"
+
+# ---------------------------------------------------------------------------
+# Optional client geolocation. JMP does not look up IPs itself: put it
+# behind a reverse proxy that sets a country header (Cloudflare
+# CF-IPCountry, nginx geo, …) and name that header here. Required when any
+# [[user]] sets allowed_countries.
+# ---------------------------------------------------------------------------
+# [geo]
+# country_header = "CF-IPCountry"
 
 # ---------------------------------------------------------------------------
 # Upstream Jellyfin servers, one [[server]] block each (`[[upstream]]` is

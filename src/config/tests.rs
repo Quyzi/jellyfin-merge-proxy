@@ -282,6 +282,8 @@ api_key = "k"
         cfg.users[1].max_parental_rating,
         Some(RatingLimit::Score(13))
     );
+    assert_eq!(kid.max_active_sessions, 0);
+    assert!(kid.allowed_countries.is_empty());
     assert!(!format!("{cfg:?}").contains("secret-kid"));
     let unknown = text.replace("server = \"X\"", "server = \"nope\"");
     assert!(Config::parse(&unknown, &cache).is_err());

@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Overview
-HTTP proxy (Rust) that fronts several upstream Jellyfin servers as one virtual Jellyfin server. Clients log in with a proxy account (`[[user]]`) and see merged/deduped libraries, per-user watch state, parental limits. Features: catalog index, hot reload, TLS (listener + upstream), encrypted secrets, Prometheus metrics + generated Grafana dashboard. Deploy targets: Docker, deb/rpm, tarballs, Unraid.
+HTTP proxy (Rust) that fronts several upstream Jellyfin servers as one virtual Jellyfin server. Clients log in with a proxy account (`[[user]]`) and see merged/deduped libraries, per-user watch state, parental limits, optional session caps and country allowlists. Features: catalog index, hot reload, TLS (listener + upstream), encrypted secrets, Prometheus metrics + generated Grafana dashboard. Deploy targets: Docker, deb/rpm, tarballs, Unraid.
 
 ## Architecture & Data Flow
 Workspace: root crate = lib `jmp` (`src/lib.rs`) + bin `jellyfin-merge-proxy` (`src/main.rs`); member `xtask` depends on the lib. `ARCHITECTURE.md` is the authoritative seam/trait table (hand-maintained).

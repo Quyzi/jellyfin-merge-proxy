@@ -266,11 +266,17 @@ impl Registry {
                 Access::Authenticated => {
                     if client.is_none() {
                         match proxy::authenticate(st, &r, &p) {
-                            Some(c) => client = Some(c),
-                            None => {
+                            Ok(Some(c)) => client = Some(c),
+                            Ok(None) => {
                                 return Ok(proxy::err_resp(
                                     axum::http::StatusCode::UNAUTHORIZED,
                                     "Unauthorized",
+                                ))
+                            }
+                            Err(d) => {
+                                return Ok(proxy::err_resp(
+                                    axum::http::StatusCode::FORBIDDEN,
+                                    d.message(),
                                 ))
                             }
                         }

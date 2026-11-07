@@ -106,19 +106,32 @@ pub(super) fn overview(l: &mut Layout) {
     l.add(
         Panel::timeseries(
             "Responses by status class",
-            "Client responses per second, stacked by HTTP status class.",
+            "Client responses per second, stacked by HTTP status class (2xx..5xx).",
             &[q(
                 format!(
-                    r#"sum by (class) (label_replace({}, "class", "${{1}}xx", "status", "([0-9]).."))"#,
+                    "sum by (status_class) ({})",
                     rate("jmp_http_requests_total", I)
                 ),
-                "{{class}}",
+                "{{status_class}}",
             )],
         )
         .stacked()
         .unit("reqps")
         .overrides(status_palette())
-        .size(12, 7),
+        .size(6, 7),
+    );
+    l.add(
+        Panel::timeseries(
+            "Responses by status code",
+            "Client responses per second, stacked by exact HTTP status code (200, 401, 403, 404, …).",
+            &[q(
+                format!("sum by (status) ({})", rate("jmp_http_requests_total", I)),
+                "{{status}}",
+            )],
+        )
+        .stacked()
+        .unit("reqps")
+        .size(6, 7),
     );
 }
 

@@ -17,6 +17,9 @@ pub(super) async fn ws_handler(State(st): State<Shared>, req: Request) -> Respon
     let Some(session) = info.get("token").and_then(|t| st.sessions.get(t)) else {
         return err_resp(StatusCode::FORBIDDEN, "Error processing request.");
     };
+    if let Err(d) = crate::access::check_geo(&st, &session.user_id, req.headers()) {
+        return err_resp(StatusCode::FORBIDDEN, d.message());
+    }
     let (mut parts, _) = req.into_parts();
     use axum::extract::FromRequestParts;
     match WebSocketUpgrade::from_request_parts(&mut parts, &st).await {

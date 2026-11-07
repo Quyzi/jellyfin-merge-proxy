@@ -176,6 +176,12 @@ Seeder: user with an account imports from it (mark "server#account"), others sha
         fan-out pages ─► retain_dtos (page total lowered)
         forwarded lists ─► ParentalFilter rewriter (after UserDataOverlay)
         item paths, Shows/{id}/Seasons|Episodes ─► 404 when the indexed item is blocked
+
+[[user]] max_active_sessions / allowed_countries + [geo] country_header
+        ─► access::{check_session_limit, check_geo} (read live from st.cfg())
+        login: geo first, same-device eviction, then session cap (401)
+        authenticate / WebSocket: geo on every authenticated request (403)
+        local::policy MaxActiveSessions reflects the configured cap
 ```
 
 * An item's score is its own rating's, else its series'; names are

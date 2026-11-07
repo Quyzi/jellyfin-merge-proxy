@@ -15,6 +15,10 @@ fn failure_counters_start_at_zero() {
 
 #[test]
 fn templates_are_bounded() {
+    assert_eq!(status_class(200), "2xx");
+    assert_eq!(status_class(301), "3xx");
+    assert_eq!(status_class(404), "4xx");
+    assert_eq!(status_class(503), "5xx");
     assert_eq!(
         route_template("/Items/0123456789abcdef0123456789abcdef/Images/Primary"),
         "/items/{id}/images/primary"

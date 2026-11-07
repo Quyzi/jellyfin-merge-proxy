@@ -121,6 +121,16 @@ impl Sessions {
         self.map.read().unwrap().get(token).cloned()
     }
 
+    /// How many issued tokens belong to `user_id`.
+    pub fn count_for_user(&self, user_id: &str) -> usize {
+        self.map
+            .read()
+            .unwrap()
+            .values()
+            .filter(|s| s.user_id == user_id)
+            .count()
+    }
+
     pub fn remove(&self, token: &str) {
         self.map.write().unwrap().remove(token);
         self.persist(|st| st.remove_sessions(&[token.to_string()]));

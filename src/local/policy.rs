@@ -42,7 +42,7 @@ pub fn policy(st: &Shared, user: &str) -> Value {
         "EnableAllFolders": true,
         "InvalidLoginAttemptCount": 0,
         "LoginAttemptsBeforeLockout": -1,
-        "MaxActiveSessions": 0,
+        "MaxActiveSessions": crate::access::max_active_sessions(&st.cfg(), user),
         "EnablePublicSharing": false,
         "BlockedMediaFolders": [],
         "BlockedChannels": [],

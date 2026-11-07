@@ -203,9 +203,10 @@ reference. The sections at a glance:
 | Section | Keys |
 |---|---|
 | `[proxy]` | `listen`, `name`, `id` (32 hex), `reported_version` (omit/`""` = highest upstream; else pin), `data_dir` (`/var/lib/jmp`), `unknown_routes` (`primary` or `empty`), `upstream_timeout_secs`, `reload_interval_secs` (3), `drain_timeout_secs` (300), `rewrite_secrets` (true) |
-| `[[user]]` | `name`, `password` (plaintext, `{ plain = ".." }`, `{ argon2 = ".." }` or a bare `$argon2id$...`), `max_parental_rating` (a name like `"PG"` or a score), `block_unrated` |
+| `[[user]]` | `name`, `password` (plaintext, `{ plain = ".." }`, `{ argon2 = ".." }` or a bare `$argon2id$...`), `max_parental_rating` (a name like `"PG"` or a score), `block_unrated`, `max_active_sessions` (0 = unlimited), `allowed_countries` (ISO alpha-2 list) |
 | `[[user.account]]` | `server`, then `user` + `password` or `api_key` (+ `user_id`): this user's own account on that server |
 | `[[server]]` | `name`, `server` (base URL, sub-paths fine), `user` + `password` or `api_key` (+ `user` or `user_id`), `priority` (lower wins when deduping), `enabled`, optional `[server.tls]` |
+| `[geo]` | `country_header` (e.g. `CF-IPCountry`); required when any user sets `allowed_countries` |
 | `[merge]` | `merge_libraries_by_name`, `dedupe`, `dedupe_types`, `label_colliding_libraries`, `fanout_limit` |
 | `[index]` | `enabled`, `refresh_interval_secs` (600), `page_size` (500), `prefer` (`priority` or `resolution`) |
 | `[userdata]` | `enabled`, `write_through`, `seed_from_upstream` (all true), `min_resume_pct` (5), `max_resume_pct` (90), `min_resume_duration_secs` (300) |
@@ -233,11 +234,16 @@ name = "kids"
 password = "..."
 max_parental_rating = "PG"
 block_unrated = false
+max_active_sessions = 2
+allowed_countries = ["US", "CA"]
 
 [[user.account]]
 server = "home"
 user = "kids"
 password = "..."      # encrypted in place, like [[server]] secrets
+
+[geo]
+country_header = "CF-IPCountry"
 ```
 
 The user's own account is used for everything that touches their content:
@@ -262,6 +268,17 @@ it. Limits are judged against the index, so a config that sets one with
 Blocked items are left out of lists with exact totals, return 404 when asked
 for directly, and are kept out of NextUp, Resume, search, playlists and
 remote play commands. Images stay reachable, as in Jellyfin.
+
+**Session caps** (`max_active_sessions`) match Jellyfin's MaxActiveSessions:
+`0` or omit means unlimited. A login from a new `DeviceId` is refused with
+401 when the user is already at the cap; logging in again from the same
+device still replaces that session. The value is reflected in
+`UserPolicy.MaxActiveSessions`.
+
+**Country allowlists** (`allowed_countries`) need `[geo] country_header`
+pointing at a reverse-proxy header such as Cloudflare's `CF-IPCountry`. JMP
+does not look up IPs itself. Missing, unknown (`XX`/`T1`) or non-allowlisted
+countries fail closed on login and on authenticated requests (403).
 
 **Play state** follows Jellyfin's `UpdatePlayState` rules: resume
 thresholds from `[userdata]`, played at the end, audiobooks by minutes, types
@@ -363,8 +380,9 @@ up to `drain_timeout_secs`), and is then logged out; its proxy ids answer
 `410 Gone` until it is added back under the same name. A changed URL rebuilds
 the backend under the same ids. Other per-server changes apply in place, and
 the new server set is swapped in atomically, so no request sees half a
-reload. Users, per-user accounts, parental limits, merge settings, the log
-filter, `[userdata]` and most of `[index]` apply live as well.
+reload. Users, per-user accounts, parental limits, session caps, geo
+allowlists, `[geo]`, merge settings, the log filter, `[userdata]` and most
+of `[index]` apply live as well.
 
 These still need a restart and are only warned about: `[proxy] listen`,
 `data_dir`, `name` and `id`, turning `[tls]` on or off or changing its

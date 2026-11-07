@@ -12,6 +12,7 @@
 //!   [`reload::Reloadable`] subscribers;
 //! * HTTP: an [`endpoints::Registry`] and a [`rewrite::RewriteChain`].
 
+pub mod access;
 pub mod auth;
 pub mod backend;
 pub mod cache;

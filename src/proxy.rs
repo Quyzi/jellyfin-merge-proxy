@@ -222,7 +222,12 @@ pub fn classify(st: &Shared, seg: &str) -> String {
 
 /// Resolve the client for an authenticated route. GET requests for images
 /// may be anonymous (clients load them via `<img>`, as with Jellyfin).
-pub fn authenticate(st: &Shared, r: &Req, classified: &[&str]) -> Option<Client> {
+/// `Err` is a geo denial (403); `Ok(None)` is a missing/invalid token (401).
+pub fn authenticate(
+    st: &Shared,
+    r: &Req,
+    classified: &[&str],
+) -> Result<Option<Client>, crate::access::Denial> {
     let _s = Stage::start("auth");
     let is_get = r.method == Method::GET || r.method == Method::HEAD;
     // `Items/{id}/Images` (the image-info list) needs a token like Jellyfin's
@@ -246,9 +251,10 @@ pub fn authenticate(st: &Shared, r: &Req, classified: &[&str]) -> Option<Client>
     };
     counter!(names::TOKEN_VALIDATIONS, "outcome" => outcome).increment(1);
     if let Some(s) = &session {
+        crate::access::check_geo(st, &s.user_id, &r.headers)?;
         st.local.live.touch(s);
     }
-    match session {
+    Ok(match session {
         Some(s) => Some(Client {
             token: s.token.clone(),
             user_id: s.user_id.clone(),
@@ -256,7 +262,7 @@ pub fn authenticate(st: &Shared, r: &Req, classified: &[&str]) -> Option<Client>
         }),
         None if anonymous_ok => Some(anon_client(st)),
         None => None,
-    }
+    })
 }
 
 pub fn anon_client(st: &Shared) -> Client {
@@ -313,6 +319,10 @@ pub async fn login(st: &Shared, r: &Req) -> Response {
         }
         Err(_) => return denied(),
     };
+    if let Err(d) = crate::access::check_geo(st, &user.id, &r.headers) {
+        tracing::info!(user = %username, reason = d.reason(), "login geo denied");
+        return err_resp(StatusCode::FORBIDDEN, d.message());
+    }
     let info = auth::client_auth(&r.headers, &[]);
     let token = auth::new_token();
     let s = Session {
@@ -342,6 +352,10 @@ pub async fn login(st: &Shared, r: &Req) -> Response {
         .remove_where(|x| x.user_id == user.id && x.device_id == s.device_id)
     {
         st.local.live.remove(&old.session_id);
+    }
+    if let Err(d) = crate::access::check_session_limit(st, &user.id) {
+        tracing::info!(user = %username, reason = d.reason(), "login session limit");
+        return err_resp(StatusCode::UNAUTHORIZED, d.message());
     }
     st.sessions.insert(s.clone());
     st.local.live.touch(&s);

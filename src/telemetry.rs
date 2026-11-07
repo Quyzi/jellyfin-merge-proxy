@@ -60,6 +60,7 @@ pub mod names {
     pub const USER_ACCOUNTS: &str = "jmp_upstream_user_accounts";
     pub const USER_ACCOUNT_AUTH: &str = "jmp_upstream_user_auth_total";
     pub const PARENTAL_HIDDEN: &str = "jmp_parental_hidden_total";
+    pub const ACCESS_DENIED: &str = "jmp_access_denied_total";
 
     pub const CACHE_REQUESTS: &str = "jmp_cache_requests_total";
     pub const CACHE_ENTRIES: &str = "jmp_cache_entries";
@@ -151,7 +152,7 @@ macro_rules! m {
 use names::*;
 /// Every metric the proxy emits (process_* metrics come from metrics-process).
 pub const METRICS: &[MetricDef] = &[
-    m!(HTTP_REQUESTS, Counter, "route, method, status", "Client HTTP requests handled, by route template, method and status code."),
+    m!(HTTP_REQUESTS, Counter, "route, method, status, status_class", "Client HTTP requests handled, by route template, method, status code and status class (2xx..5xx)."),
     m!(HTTP_DURATION, Histogram, "route, method", "Time until response headers were produced (streams: excludes body transfer)."),
     m!(HTTP_IN_FLIGHT, Gauge, "", "Client requests currently being processed (headers not yet sent)."),
     m!(HTTP_RESPONSE_SIZE, Histogram, "route", "Response body size when known up-front (Content-Length)."),
@@ -185,6 +186,7 @@ pub const METRICS: &[MetricDef] = &[
     m!(USER_ACCOUNTS, Gauge, "server", "Proxy users with their own upstream account on this server ([[user.account]])."),
     m!(USER_ACCOUNT_AUTH, Counter, "server, outcome", "Logins of per-user upstream accounts: success, failure, unreachable."),
     m!(PARENTAL_HIDDEN, Counter, "source", "Items hidden by a user's max_parental_rating (source: index, list, item)."),
+    m!(ACCESS_DENIED, Counter, "reason", "Access denied by per-user policy: session_limit, geo_missing, geo_blocked."),
     m!(CACHE_REQUESTS, Counter, "cache, outcome", "Catalog cache lookups: hit, miss, stale (refresh forced/expired)."),
     m!(CACHE_ENTRIES, Gauge, "cache, server", "Entries held in the catalog cache."),
     m!(CACHE_BYTES, Gauge, "cache, server", "Approximate serialized size of the catalog cache."),
