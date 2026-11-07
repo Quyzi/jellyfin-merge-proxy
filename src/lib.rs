@@ -107,6 +107,9 @@ pub struct AppState {
     pub source: Option<Arc<dyn ConfigSource>>,
     pub log: Option<telemetry::LogHandle>,
     reload_lock: tokio::sync::Mutex<()>,
+    /// Highest version seen while `reported_version` is blank (process-local).
+    /// Avoids falling back to 10.10.7 after upstreams have reported once.
+    last_auto_version: Mutex<Option<String>>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -276,6 +279,7 @@ impl AppState {
             source,
             log: opts.log,
             reload_lock: tokio::sync::Mutex::new(()),
+            last_auto_version: Mutex::new(None),
         });
         st.publish_config_gauges();
         Ok(st)

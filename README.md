@@ -202,7 +202,7 @@ reference. The sections at a glance:
 
 | Section | Keys |
 |---|---|
-| `[proxy]` | `listen`, `name`, `id` (32 hex), `reported_version`, `data_dir` (`/var/lib/jmp`), `unknown_routes` (`primary` or `empty`), `upstream_timeout_secs`, `reload_interval_secs` (3), `drain_timeout_secs` (300), `rewrite_secrets` (true) |
+| `[proxy]` | `listen`, `name`, `id` (32 hex), `reported_version` (omit/`""` = highest upstream; else pin), `data_dir` (`/var/lib/jmp`), `unknown_routes` (`primary` or `empty`), `upstream_timeout_secs`, `reload_interval_secs` (3), `drain_timeout_secs` (300), `rewrite_secrets` (true) |
 | `[[user]]` | `name`, `password` (plaintext, `{ plain = ".." }`, `{ argon2 = ".." }` or a bare `$argon2id$...`), `max_parental_rating` (a name like `"PG"` or a score), `block_unrated` |
 | `[[user.account]]` | `server`, then `user` + `password` or `api_key` (+ `user_id`): this user's own account on that server |
 | `[[server]]` | `name`, `server` (base URL, sub-paths fine), `user` + `password` or `api_key` (+ `user` or `user_id`), `priority` (lower wins when deduping), `enabled`, optional `[server.tls]` |

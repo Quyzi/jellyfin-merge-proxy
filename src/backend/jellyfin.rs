@@ -308,6 +308,11 @@ impl JellyfinBackend {
             .get("Version")
             .and_then(|v| v.as_str())
             .map(String::from);
+        // Keep Version even if creds.login fails next — status() and blank
+        // reported_version need it before a successful session exists.
+        if let Some(v) = new.version.clone() {
+            self.state.write().await.version = Some(v);
+        }
         let creds = self.credentials.read().unwrap().clone();
         let grant = creds.login(self).await?;
         new.token = Some(grant.token);
@@ -326,6 +331,33 @@ pub fn version_at_least(v: &str, major: u64, minor: u64) -> bool {
     let ma = it.next().unwrap_or(0);
     let mi = it.next().unwrap_or(0);
     (ma, mi) >= (major, minor)
+}
+
+/// Compare dotted numeric versions (`10.11.0` > `10.10.7`). Non-numeric
+/// segments count as 0; missing trailing segments are 0.
+pub fn cmp_version(a: &str, b: &str) -> std::cmp::Ordering {
+    let mut aa = a.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
+    let mut bb = b.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
+    loop {
+        match (aa.next(), bb.next()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (Some(x), Some(y)) => {
+                if x != y {
+                    return x.cmp(&y);
+                }
+            }
+            (Some(x), None) => {
+                if x != 0 {
+                    return std::cmp::Ordering::Greater;
+                }
+            }
+            (None, Some(y)) => {
+                if y != 0 {
+                    return std::cmp::Ordering::Less;
+                }
+            }
+        }
+    }
 }
 
 mod channel;

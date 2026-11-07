@@ -46,6 +46,27 @@ fn versions() {
     assert!(super::version_at_least("10.9.0", 10, 9));
     assert!(super::version_at_least("10.10.7", 10, 9));
     assert!(!super::version_at_least("10.8.13", 10, 9));
+    use std::cmp::Ordering::*;
+    assert_eq!(super::cmp_version("10.11.0", "10.10.7"), Greater);
+    assert_eq!(super::cmp_version("10.10.7", "10.11"), Less);
+    assert_eq!(super::cmp_version("10.11", "10.11.0"), Equal);
+    assert_eq!(super::cmp_version("10.11.0-rc1", "10.11.0"), Equal);
+    assert_eq!(super::cmp_version("10.11.5", "10.11.2"), Greater);
+}
+
+/// Public Version is cached even when AuthenticateByName fails.
+#[tokio::test]
+async fn version_survives_failed_login() {
+    let cfg = accounts_cfg("kpw");
+    let b =
+        JellyfinBackend::new(ServerId(0), cfg.upstreams[0].clone(), &cfg, &RustlsProvider).unwrap();
+    let fake = Arc::new(FakeJellyfin::default());
+    fake.refuse_login
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    b.set_transport(fake);
+    assert!(b.ensure_login().await.is_err());
+    assert_eq!(b.status().await.version.as_deref(), Some("10.11.0"));
+    assert!(!b.status().await.logged_in);
 }
 
 /// Answers login calls and records which token each other call carried.
@@ -57,6 +78,8 @@ struct FakeJellyfin {
     logins: std::sync::atomic::AtomicUsize,
     /// Login user -> the DeviceId it logged in with.
     devices: std::sync::Mutex<HashMap<String, String>>,
+    /// `Users/AuthenticateByName` returns 401 when set.
+    refuse_login: std::sync::atomic::AtomicBool,
 }
 
 impl Transport for FakeJellyfin {
@@ -79,18 +102,22 @@ impl Transport for FakeJellyfin {
         let (status, v) = if path.ends_with("System/Info/Public") {
             (200, serde_json::json!({"Version": "10.11.0"}))
         } else if path.ends_with("Users/AuthenticateByName") {
-            let n = self
-                .logins
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let user = body.unwrap()["Username"].as_str().unwrap().to_string();
-            let auth = req.headers()["Authorization"].to_str().unwrap();
-            let dev = auth.split("DeviceId=\"").nth(1).unwrap();
-            let dev = dev.split('"').next().unwrap().to_string();
-            self.devices.lock().unwrap().insert(user.clone(), dev);
-            (
-                200,
-                serde_json::json!({"AccessToken": format!("tok-{user}-{n}"), "User": {"Id": format!("id-{user}")}}),
-            )
+            if self.refuse_login.load(std::sync::atomic::Ordering::Relaxed) {
+                (401, Value::Null)
+            } else {
+                let n = self
+                    .logins
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let user = body.unwrap()["Username"].as_str().unwrap().to_string();
+                let auth = req.headers()["Authorization"].to_str().unwrap();
+                let dev = auth.split("DeviceId=\"").nth(1).unwrap();
+                let dev = dev.split('"').next().unwrap().to_string();
+                self.devices.lock().unwrap().insert(user.clone(), dev);
+                (
+                    200,
+                    serde_json::json!({"AccessToken": format!("tok-{user}-{n}"), "User": {"Id": format!("id-{user}")}}),
+                )
+            }
         } else {
             self.seen.lock().unwrap().push((path, token.clone()));
             let mut ex = self.expire.lock().unwrap();

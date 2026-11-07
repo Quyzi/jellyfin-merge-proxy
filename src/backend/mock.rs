@@ -65,6 +65,7 @@ pub struct MockBackend {
     priority: i64,
     location: BackendLocation,
     user_id: String,
+    version: Mutex<Option<String>>,
     routes: Mutex<Vec<MockRoute>>,
     calls: Mutex<Vec<MockCall>>,
     down: AtomicBool,
@@ -93,6 +94,7 @@ impl MockBackend {
                 base_path: String::new(),
             },
             user_id: crate::ids::hash_id(&["mock-user", name]),
+            version: Mutex::new(Some("10.10.7".into())),
             routes: Mutex::new(Vec::new()),
             calls: Mutex::new(Vec::new()),
             down: AtomicBool::new(false),
@@ -187,6 +189,12 @@ impl MockBackend {
     pub fn set_down(&self, down: bool) {
         self.down.store(down, Ordering::Relaxed);
     }
+
+    /// Version reported via [`MediaBackend::status`] (and used when the
+    /// proxy auto-picks `reported_version`).
+    pub fn set_version(&self, version: Option<&str>) {
+        *self.version.lock().unwrap() = version.map(str::to_string);
+    }
 }
 
 #[async_trait]
@@ -242,7 +250,7 @@ impl MediaBackend for MockBackend {
             healthy: !self.is_down(),
             logged_in: true,
             credentials: "none",
-            version: Some("10.10.7".into()),
+            version: self.version.lock().unwrap().clone(),
             user_id: Some(self.user_id.clone()),
             token_age_secs: None,
             user_accounts: 0,

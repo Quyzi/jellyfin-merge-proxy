@@ -14,7 +14,9 @@ name = "Jellyfin Merge Proxy"
 # Clients key saved servers by this id, so don't change it once in use.
 # id = "4a1f0c2e9b7d4e6f8a3c5b1d2e7f9a0c"
 # Jellyfin version reported to clients (clients gate features on it).
-reported_version = "10.10.7"
+# Omit or "" = highest upstream version (cached status; sticky only while no
+# upstream is reporting). Set a pin to force a fixed string.
+# reported_version = "10.10.7"
 # Where the state database (jmp.db: id lookup table, client sessions) and the
 # auto-generated secret key (secret.key) are stored.
 # Keep it on a volume so ids/logins/keys survive restarts.

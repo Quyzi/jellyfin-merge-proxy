@@ -169,7 +169,8 @@ fn default_name() -> String {
     "Jellyfin Merge Proxy".into()
 }
 fn default_version() -> String {
-    "10.10.7".into()
+    // Empty / omitted = highest upstream version (see system handlers).
+    String::new()
 }
 fn default_data_dir() -> PathBuf {
     PathBuf::from("/var/lib/jmp")
