@@ -298,7 +298,7 @@ jobs:
           } > release_notes.md
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2.2.0
+        uses: softprops/action-gh-release@v2.2.1
         with:
           name: v${{ needs.validate.outputs.version }}
           body_path: release_notes.md
